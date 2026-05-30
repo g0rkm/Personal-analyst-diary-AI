@@ -1,0 +1,63 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+*.spec
+
+# ── Sanal ortamlar ────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# ── Uygulama verisi ───────────────────────────────────────────────────────────
+# Kullanıcıya özel veritabanı — paylaşılmamalı
+diary.db
+diary.db-shm
+diary.db-wal
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Ayar dosyası ─────────────────────────────────────────────────────────────
+# Kişisel yol ayarları içerebilir
+settings.json
+
+# ── IDE ve editör dosyaları ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.cursor/
+
+# ── İşletim sistemi dosyaları ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ── Geçici ve log dosyaları ───────────────────────────────────────────────────
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# ── Paket yönetimi ────────────────────────────────────────────────────────────
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Tarama / analiz dosyaları ─────────────────────────────────────────────────
+scan.txt
+emoji_scan.txt
