@@ -146,12 +146,11 @@ class DiaryCalendar(QCalendarWidget):
                 font-size: 14px;
                 font-weight: 700;
                 color: {TEXT_PRIMARY};
-                padding: 4px 7px;
+                padding: 4px 8px;
                 margin-top: 4px;    /* SADECE ÜSTTEKİ boşluğu ayarlar */
-                margin-bottom: 10px; /* SADECE ALTTAKİ boşluğu ayarlar */
+                margin-bottom: 9px; /* SADECE ALTTAKİ boşluğu ayarlar */
                 margin-left: 2px;   /* Sol boşluk */
-                margin-right: 2px;  /* Sağ boşluk */
-                letter-spacing: 0.2px;
+                margin-right: 2px;  /* Sağ boşluk */                letter-spacing: 0.2px;
             }}
             /* Ay/Yıl düşme ok işaretini gizle */
             QCalendarWidget QToolButton::menu-indicator {{
@@ -180,45 +179,66 @@ class DiaryCalendar(QCalendarWidget):
                 color: {TEXT_PRIMARY};
                 border: 1px solid rgba(255,255,255,0.1);
                 border-radius: 6px;
-                padding-left: 6px;
-                
-                /* ÇÖZÜM 1: Metin alanını sağdan daraltır, okların üstüne binmesini engeller */
-                padding-right: 20px; 
-                
-                /* ÇÖZÜM 2: Kutuyu daraltarak okları yıla yaklaştırır */
+                padding-left: 8px;   
+                padding-right: 22px; 
                 max-width: 60px;     
                 
-                /* ÇÖZÜM 3: Yüksekliği kısıtlayarak dış çerçeveden taşmasını kesin olarak önler */
-                min-height: 10px;    
+                min-height: 48px;
+                max-height: 48px;
+                /* Qt layout'u bu widget'ı üstten hizaladığı için manuel olarak ortalıyoruz */
+                margin-top: 4px;
+                margin-bottom: 5px; 
                 
-                selection-background-color: {ACCENT_RED};
+                /* Çirkin kırmızı arkaplan vurgusunu kapatıp, sadece sayıyı renkli yapıyoruz */
+                selection-background-color: transparent;
+                selection-color: {ACCENT_RED};
             }}
 
             /* Yukarı Ok Butonu */
             QCalendarWidget QSpinBox::up-button {{
                 subcontrol-origin: border;
                 subcontrol-position: top right;
-                width: 16px; /* Ok kutusunun genişliği */
+                width: 18px; 
                 border-left: 1px solid rgba(255,255,255,0.1);
                 border-bottom: 1px solid rgba(255,255,255,0.1);
                 border-top-right-radius: 6px;
                 background: rgba(255,255,255,0.02);
             }}
             QCalendarWidget QSpinBox::up-button:hover {{ 
-                background: rgba(255,255,255,0.1); 
+                background: rgba(232, 69, 69, 0.15); 
             }}
 
             /* Aşağı Ok Butonu */
             QCalendarWidget QSpinBox::down-button {{
                 subcontrol-origin: border;
                 subcontrol-position: bottom right;
-                width: 16px;
+                width: 18px;
                 border-left: 1px solid rgba(255,255,255,0.1);
                 border-bottom-right-radius: 6px;
                 background: rgba(255,255,255,0.02);
             }}
             QCalendarWidget QSpinBox::down-button:hover {{ 
-                background: rgba(255,255,255,0.1); 
+                background: rgba(232, 69, 69, 0.15); 
+            }}
+
+            /* Yukarı Ok Simgesi (İkonu) */
+            QCalendarWidget QSpinBox::up-arrow {{
+                image: url("ikonlar/yukari_ok.svg"); 
+                width: 10px;  
+                height: 10px; 
+            }}
+            QCalendarWidget QSpinBox::up-arrow:hover {{
+                image: url("ikonlar/yukari_ok_kirmizi.svg"); 
+            }}
+
+            /* Aşağı Ok Simgesi (İkonu) */
+            QCalendarWidget QSpinBox::down-arrow {{
+                image: url("ikonlar/asagi_ok.svg"); 
+                width: 10px;
+                height: 10px;
+            }}
+            QCalendarWidget QSpinBox::down-arrow:hover {{
+                image: url("ikonlar/asagi_ok_kirmizi.svg");
             }}
 
             /* Tablo görünümü — paintCell() kendi çizimini yapıyor,
