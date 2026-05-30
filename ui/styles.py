@@ -72,25 +72,18 @@ QWidget#centralWidget {{
 
 /* ── Arama Çubuğu ──────────────────────────────────────── */
 QLineEdit#searchBar {{
-    background-color: {BG_WIDGET};
-    color: {TEXT_PRIMARY};
-    border: none;
-    border-radius: 10px;
+    background-color: #16162A;
+    color: #F0F0FF;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 12px;
     padding: 8px 16px;
     font-size: 13px;
-    selection-background-color: {ACCENT_RED};
+    selection-background-color: #E84545;
 }}
 QLineEdit#searchBar:focus {{
-    background-color: {BG_WIDGET_ALT};
-}}
-QFrame#searchBarFrame {{
-    background-color: {BG_WIDGET};
-    border: 1.5px solid {BORDER_COLOR};
-    border-radius: 12px;
-}}
-QFrame#searchBarFrame[focused="true"] {{
-    border: 2px solid {ACCENT_RED};
-    background-color: {BG_WIDGET_ALT};
+    border: 2px solid #E84545;
+    background-color: #1E1E35;
+    padding: 7px 15px; /* Sınır 1px arttığı için, padding'i 1px azalttık */
 }}
 
 /* ── Metin Editörü ─────────────────────────────────────── */

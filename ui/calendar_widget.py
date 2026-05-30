@@ -9,10 +9,13 @@ paintCell() override ile her gün yuvarlak daire içinde gösterilir:
   - Seçili gün: parlak kenarlık ve hafif glow efekti
 """
 
-from PyQt6.QtWidgets import QCalendarWidget, QAbstractItemView, QTableView, QFrame
+from PyQt6.QtWidgets import (
+    QCalendarWidget, QAbstractItemView, QTableView, QFrame,
+    QStyledItemDelegate, QStyleOptionViewItem, QStyle
+)
 from PyQt6.QtGui import (
     QColor, QTextCharFormat, QBrush, QPainter,
-    QPen, QFont, QRadialGradient, QLinearGradient
+    QPen, QFont, QRadialGradient, QLinearGradient, QPalette
 )
 from PyQt6.QtCore import QDate, Qt, QRect, QSize, QRectF
 
@@ -21,6 +24,27 @@ from ui.styles import (
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     ACCENT_RED, BORDER_COLOR
 )
+
+
+class NoSelectionDelegate(QStyledItemDelegate):
+    """
+    Qt'nin inatçı (sistem temasına gömülü) varsayılan seçim çubuğunu (mor/mavi çizgi) 
+    engellemek için, orijinal QCalendarDelegate'i sarmalayan proxy delegate.
+    """
+    def __init__(self, original_delegate, parent=None):
+        super().__init__(parent)
+        self.original_delegate = original_delegate
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        # Sistemin seçili/odaklı olduğunu bilmesini engelle
+        opt.state &= ~QStyle.StateFlag.State_Selected
+        opt.state &= ~QStyle.StateFlag.State_HasFocus
+        
+        self.original_delegate.paint(painter, opt, index)
+
+    def sizeHint(self, option, index):
+        return self.original_delegate.sizeHint(option, index)
 
 
 class DiaryCalendar(QCalendarWidget):
@@ -54,6 +78,18 @@ class DiaryCalendar(QCalendarWidget):
             table_view.setFrameShape(QFrame.Shape.NoFrame)
             table_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
+            # Orijinal delegate'i alıp kendi sarmalayıcımızla değiştiriyoruz
+            # Böylece Qt arka planda mor seçim çerçevesi çizmeyecek!
+            original_delegate = table_view.itemDelegate()
+            self._custom_delegate = NoSelectionDelegate(original_delegate, table_view)
+            table_view.setItemDelegate(self._custom_delegate)
+
+            # Sistem kaynaklı mor seçim çubuğunu tamamen yok etmek için Highlight rengini şeffaf yap (yedeklemeli çözüm)
+            palette = table_view.palette()
+            palette.setColor(QPalette.ColorRole.Highlight, QColor(Qt.GlobalColor.transparent))
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor(Qt.GlobalColor.transparent))
+            table_view.setPalette(palette)
+
     def _apply_stylesheet(self) -> None:
         """
         QSS ile takvim stillendirmesi.
@@ -77,18 +113,19 @@ class DiaryCalendar(QCalendarWidget):
                 );
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 12px;
-                min-height: 48px;
-                padding: 4px;
-                margin-bottom: 8px;
+                min-height: 45px;
+                padding: 6px;
+                margin-bottom: 5px;
             }}
 
-            /* İleri/Geri ok butonları */
+            /* İleri/Geri ok butonları ve genel butonlar */
             QCalendarWidget QToolButton {{
                 background-color: transparent;
                 color: {TEXT_PRIMARY};
                 border: none;
                 border-radius: 8px;
-                padding: 6px 12px;
+                padding: 4px 10px;
+                margin: 4px; /* Taşmayı önlemek için layout kenarlarından uzaklaştır */
                 font-size: 15px;
                 font-weight: bold;
             }}
@@ -100,13 +137,14 @@ class DiaryCalendar(QCalendarWidget):
                 background-color: rgba(232, 69, 69, 0.3);
             }}
 
-            /* Ay/Yıl butonları */
+            /* Ay/Yıl butonları (Özel) */
             QCalendarWidget QToolButton#qt_calendar_monthbutton,
             QCalendarWidget QToolButton#qt_calendar_yearbutton {{
                 font-size: 14px;
                 font-weight: 700;
                 color: {TEXT_PRIMARY};
-                padding: 4px 8px;
+                padding: 4px 7px;
+                margin: 4px 2px; /* Dikeyde 4px, yatayda 2px boşluk */
                 letter-spacing: 0.3px;
             }}
             /* Ay/Yıl düşme ok işaretini gizle */
@@ -149,17 +187,18 @@ class DiaryCalendar(QCalendarWidget):
                 selection-color: {TEXT_PRIMARY};
                 outline: none;
             }}
-            QCalendarWidget QAbstractItemView::item {{
-                background-color: transparent;
-                outline: none;
-                border: none;
+            QCalendarWidget QTableView {{
+                selection-background-color: transparent;
             }}
-            QCalendarWidget QAbstractItemView::item:selected {{
+            QCalendarWidget QTableView::item {{
+                background-color: transparent;
+            }}
+            QCalendarWidget QTableView::item:selected {{
                 background-color: transparent;
                 border: none;
                 outline: none;
             }}
-            QCalendarWidget QAbstractItemView::item:focus {{
+            QCalendarWidget QTableView::item:focus {{
                 background-color: transparent;
                 border: none;
                 outline: none;
@@ -214,18 +253,12 @@ class DiaryCalendar(QCalendarWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(circle_rect)
 
-            # Seçili dolu gün: parlak kenarlık ve sol bar
+            # Seçili dolu gün: parlak kenarlık
             if is_selected:
                 pen = QPen(QColor("#FFFFFF"), 2.0)
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(circle_rect.adjusted(-1, -1, 1, 1))
-                
-                # Seçim çubuğunu dairenin soluna yasla
-                bar_rect = QRectF(circle_rect.left() - 4, circle_rect.top() + 6, 3, size - 12)
-                painter.setBrush(QBrush(QColor("#FFFFFF")))
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawRoundedRect(bar_rect, 1.5, 1.5)
 
             text_color = QColor("#FFFFFF")
 
@@ -235,12 +268,6 @@ class DiaryCalendar(QCalendarWidget):
             pen = QPen(QColor(ACCENT_RED), 1.8)
             painter.setPen(pen)
             painter.drawEllipse(circle_rect)
-            
-            # Seçim çubuğunu dairenin soluna yasla
-            bar_rect = QRectF(circle_rect.left() - 4, circle_rect.top() + 6, 3, size - 12)
-            painter.setBrush(QBrush(QColor(ACCENT_RED)))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(bar_rect, 1.5, 1.5)
             
             text_color = QColor(ACCENT_RED)
 

@@ -157,25 +157,13 @@ class EditorPanel(QWidget):
         bottom_layout.addWidget(self.word_count_label)
         bottom_layout.addStretch()
 
-        # Butonları kapsayan kutu (QFrame)
-        btn_container = QFrame()
-        btn_container.setStyleSheet(f"""
-            QFrame {{
-                background: {GLASS_BG};
-                border: 1px solid {BORDER_COLOR};
-                border-radius: 14px;
-            }}
-        """)
-        btn_layout = QHBoxLayout(btn_container)
-        btn_layout.setContentsMargins(4, 4, 4, 4)
-        btn_layout.setSpacing(6)
-
         self.save_btn = QPushButton("Kaydet")
         self.save_btn.setObjectName("saveButton")
         self.save_btn.setFixedHeight(38)
         self.save_btn.setToolTip("Ctrl+S ile de kaydedebilirsiniz")
+        self._apply_save_btn_style()
         self.save_btn.clicked.connect(self.save_entry)
-        btn_layout.addWidget(self.save_btn)
+        bottom_layout.addWidget(self.save_btn)
 
         # Kaydı Sil butonu
         self.delete_btn = QPushButton("Kaydı Sil")
@@ -203,9 +191,7 @@ class EditorPanel(QWidget):
             }}
         """)
         self.delete_btn.clicked.connect(self.confirm_delete_entry)
-        btn_layout.addWidget(self.delete_btn)
-
-        bottom_layout.addWidget(btn_container)
+        bottom_layout.addWidget(self.delete_btn)
 
         layout.addLayout(bottom_layout)
 
@@ -320,7 +306,26 @@ class EditorPanel(QWidget):
 
     def _reset_save_button(self) -> None:
         self.save_btn.setText("Kaydet")
-        self.save_btn.setStyleSheet("")
+        self._apply_save_btn_style()
+
+    def _apply_save_btn_style(self) -> None:
+        self.save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENT_RED};
+                color: #FFFFFF;
+                border: none;
+                border-radius: 12px;
+                padding: 10px 18px;
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background: #FF5555;
+            }}
+            QPushButton:pressed {{
+                background: #D03030;
+            }}
+        """)
 
     def _append_prompt(self, prompt: str) -> None:
         """Öneri kartından gelen metni editöre ekler."""

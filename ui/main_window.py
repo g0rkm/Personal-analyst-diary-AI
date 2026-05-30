@@ -129,12 +129,6 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self._build_header())
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background: {BORDER_COLOR}; border: none;")
-        root.addWidget(sep)
-
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("background: transparent;")
 
@@ -152,9 +146,10 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QWidget:
         """Gradient üst başlık çubuğu: logo + sekme butonları + arama."""
         header = QWidget()
+        header.setObjectName("mainHeader")
         header.setFixedHeight(65)
         header.setStyleSheet(f"""
-            QWidget {{
+            QWidget#mainHeader {{
                 background: qlineargradient(
                     x1:0, y1:0, x2:1, y2:0,
                     stop:0 rgba(13,13,26,0.98),
@@ -187,7 +182,7 @@ class MainWindow(QMainWindow):
         self._search_frame.setFixedWidth(260)
         self._search_frame.setFixedHeight(34)
         search_frame_layout = QHBoxLayout(self._search_frame)
-        search_frame_layout.setContentsMargins(2, 2, 2, 2)
+        search_frame_layout.setContentsMargins(0, 0, 0, 0)
         search_frame_layout.setSpacing(0)
 
         self.search_bar = QLineEdit()
