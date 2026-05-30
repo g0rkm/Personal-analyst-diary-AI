@@ -125,7 +125,10 @@ class DiaryCalendar(QCalendarWidget):
                 border: none;
                 border-radius: 8px;
                 padding: 4px 10px;
-                margin: 4px; /* Taşmayı önlemek için layout kenarlarından uzaklaştır */
+                margin-top: 4px;    /* SADECE ÜSTTEKİ boşluğu ayarlar */
+                margin-bottom: 10px; /* SADECE ALTTAKİ boşluğu ayarlar */
+                margin-left: 4px;   /* Sol boşluk */
+                margin-right: 4px;  /* Sağ boşluk */
                 font-size: 15px;
                 font-weight: bold;
             }}
@@ -144,8 +147,11 @@ class DiaryCalendar(QCalendarWidget):
                 font-weight: 700;
                 color: {TEXT_PRIMARY};
                 padding: 4px 7px;
-                margin: 4px 2px; /* Dikeyde 4px, yatayda 2px boşluk */
-                letter-spacing: 0.3px;
+                margin-top: 4px;    /* SADECE ÜSTTEKİ boşluğu ayarlar */
+                margin-bottom: 10px; /* SADECE ALTTAKİ boşluğu ayarlar */
+                margin-left: 2px;   /* Sol boşluk */
+                margin-right: 2px;  /* Sağ boşluk */
+                letter-spacing: 0.2px;
             }}
             /* Ay/Yıl düşme ok işaretini gizle */
             QCalendarWidget QToolButton::menu-indicator {{
@@ -168,14 +174,51 @@ class DiaryCalendar(QCalendarWidget):
                 color: white;
             }}
 
-            /* Yıl spin box */
+            /* Yıl spin box ana kutusu */
             QCalendarWidget QSpinBox {{
                 background-color: rgba(255,255,255,0.06);
                 color: {TEXT_PRIMARY};
                 border: 1px solid rgba(255,255,255,0.1);
                 border-radius: 6px;
-                padding: 2px 6px;
+                padding-left: 6px;
+                
+                /* ÇÖZÜM 1: Metin alanını sağdan daraltır, okların üstüne binmesini engeller */
+                padding-right: 20px; 
+                
+                /* ÇÖZÜM 2: Kutuyu daraltarak okları yıla yaklaştırır */
+                max-width: 60px;     
+                
+                /* ÇÖZÜM 3: Yüksekliği kısıtlayarak dış çerçeveden taşmasını kesin olarak önler */
+                min-height: 10px;    
+                
                 selection-background-color: {ACCENT_RED};
+            }}
+
+            /* Yukarı Ok Butonu */
+            QCalendarWidget QSpinBox::up-button {{
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 16px; /* Ok kutusunun genişliği */
+                border-left: 1px solid rgba(255,255,255,0.1);
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+                border-top-right-radius: 6px;
+                background: rgba(255,255,255,0.02);
+            }}
+            QCalendarWidget QSpinBox::up-button:hover {{ 
+                background: rgba(255,255,255,0.1); 
+            }}
+
+            /* Aşağı Ok Butonu */
+            QCalendarWidget QSpinBox::down-button {{
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 16px;
+                border-left: 1px solid rgba(255,255,255,0.1);
+                border-bottom-right-radius: 6px;
+                background: rgba(255,255,255,0.02);
+            }}
+            QCalendarWidget QSpinBox::down-button:hover {{ 
+                background: rgba(255,255,255,0.1); 
             }}
 
             /* Tablo görünümü — paintCell() kendi çizimini yapıyor,
