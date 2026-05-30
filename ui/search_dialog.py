@@ -110,7 +110,7 @@ class SearchResultDialog(QDialog):
             layout.addWidget(self.list_widget)
 
             # Bilgi notu
-            hint_label = QLabel("Ipucu: Tarihe cift tiklayarak o gune gidin")
+            hint_label = QLabel("Tarihe çift tıklayarak o güne gidin")
             hint_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; padding: 2px 0;")
             layout.addWidget(hint_label)
         else:
