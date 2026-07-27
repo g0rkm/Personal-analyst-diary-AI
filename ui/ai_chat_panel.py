@@ -2,28 +2,30 @@
 ui/ai_chat_panel.py
 -------------------
 AI asistan chat paneli — sağ tarafta açılır-kapanır sidebar.
-Şu an için placeholder yanıtlar üretir.
-Gelecekte RAG/LLM entegrasyonuna hazır mimari:
-  - send_message() → AI motoruna gönderilecek
-  - receive_response() → AI yanıtını ekrana basacak
+Model indirme, RAG sohbeti ve arayüzü yönetir.
 """
 
+import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton,
-    QScrollArea, QFrame, QSizePolicy
+    QScrollArea, QFrame, QSizePolicy, QProgressBar
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QCursor
 
 from ui.styles import (
     BG_DARK, BG_WIDGET, BG_CARD, BG_SIDEBAR,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    ACCENT_RED, ACCENT_RED_BG, BORDER_COLOR, GLASS_BG, GLASS_BORDER,
-    BG_GRADIENT_TOP, BG_GRADIENT_BOTTOM
+    ACCENT_RED, ACCENT_RED_BG, BORDER_COLOR, GLASS_BG, GLASS_BORDER
 )
 
-# Yapay zeka için örnek soru önerileri (placeholder dönemde gösterilir)
+from ai.rag_engine import RAGEngine
+from ai.worker import ModelDownloadWorker, RAGChatWorker
+
+MODEL_URL = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+MODEL_PATH = "models/qwen2.5-3b-instruct-q4_k_m.gguf"
+
 SAMPLE_QUESTIONS = [
     "Geçen ay en çok neyi erteledim?",
     "Stresli olduğumda bana ne iyi geliyor?",
@@ -31,42 +33,28 @@ SAMPLE_QUESTIONS = [
     "En mutlu olduğum günlerde ortak ne var?",
 ]
 
-# Placeholder yanıt mesajları (AI gelene kadar)
-PLACEHOLDER_RESPONSES = [
-    "AI asistan yakin zamanda burada! Bu ozellik gelistirme asamasinda.",
-    "Gecmis gunluklerini analiz edebilmem icin AI entegrasyonu bekleniyor.",
-    "Sorularini kaydediyorum. AI aktif oldugunda sana detayli yanit verecegim!",
-    "RAG sistemi kuruldugunda gunluklerini gercek zamanli analiz edecegim.",
-]
-
-_response_index = 0
-
 
 class ChatBubble(QWidget):
     """Tek bir chat mesajı balonu."""
 
     def __init__(self, text: str, is_user: bool, parent=None):
         super().__init__(parent)
-        self._setup_ui(text, is_user)
+        self.is_user = is_user
+        self.label = QLabel(text)
+        self._setup_ui()
 
-    def _setup_ui(self, text: str, is_user: bool) -> None:
+    def _setup_ui(self) -> None:
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 2)
 
-        bubble = QLabel(text)
-        bubble.setWordWrap(True)
-        bubble.setFont(QFont("Segoe UI", 12))
-        bubble.setMaximumWidth(220)
+        self.label.setWordWrap(True)
+        self.label.setFont(QFont("Segoe UI", 12))
+        self.label.setMaximumWidth(220)
 
-        if is_user:
-            # Kullanıcı mesajı — sağda, kırmızı
-            bubble.setStyleSheet(f"""
+        if self.is_user:
+            self.label.setStyleSheet(f"""
                 QLabel {{
-                    background: qlineargradient(
-                        x1:0, y1:0, x2:1, y2:0,
-                        stop:0 {ACCENT_RED},
-                        stop:1 #C03535
-                    );
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT_RED}, stop:1 #C03535);
                     color: #FFFFFF;
                     border-radius: 14px 14px 4px 14px;
                     padding: 8px 12px;
@@ -74,10 +62,9 @@ class ChatBubble(QWidget):
                 }}
             """)
             layout.addStretch()
-            layout.addWidget(bubble)
+            layout.addWidget(self.label)
         else:
-            # AI mesajı — solda, koyu widget rengi
-            bubble.setStyleSheet(f"""
+            self.label.setStyleSheet(f"""
                 QLabel {{
                     background: {BG_CARD};
                     color: {TEXT_PRIMARY};
@@ -87,29 +74,37 @@ class ChatBubble(QWidget):
                     font-size: 12px;
                 }}
             """)
-            layout.addWidget(bubble)
+            layout.addWidget(self.label)
             layout.addStretch()
+
+    def append_text(self, text: str):
+        """Streaming sırasında metin ekler."""
+        current = self.label.text()
+        self.label.setText(current + text)
 
 
 class AIChatPanel(QWidget):
-    """
-    Sağ kenar AI chat paneli.
-    Başlangıçta dar (sadece ikon + başlık görünür),
-    toggle ile tam genişliğe açılır.
-    """
-
-    # Gelecekte AI motoruna bağlanacak sinyal
-    message_sent = pyqtSignal(str)
-
     COLLAPSED_WIDTH = 52
     EXPANDED_WIDTH  = 280
 
+    # Rag engine'in dışarıdan atanması için (main_window'dan)
     def __init__(self, parent=None):
         super().__init__(parent)
         self._is_expanded = False
-        self._message_count = 0
+        self.rag_engine = None
+        self.chat_worker = None
+        self.download_worker = None
+        self._current_ai_bubble = None
+        self._chat_history = []  # Sohbet geçmişi — modelin bağlamı takip etmesi için
+        self._current_user_query = ""  # Yanıt tamamlandığında geçmişe eklemek için
+        self._current_ai_response = ""  # Streaming sırasında toplanan tam yanıt
+        
         self._setup_ui()
         self.setFixedWidth(self.COLLAPSED_WIDTH)
+        self._check_model_status()
+
+    def set_rag_engine(self, rag_engine: RAGEngine):
+        self.rag_engine = rag_engine
 
     def _setup_ui(self) -> None:
         self.setStyleSheet(f"""
@@ -127,7 +122,7 @@ class AIChatPanel(QWidget):
         self._main_layout.setContentsMargins(0, 0, 0, 0)
         self._main_layout.setSpacing(0)
 
-        # ── Toggle butonu (her zaman görünür) ─────────────────────────────
+        # Toggle Butonu
         self._toggle_btn = QPushButton()
         self._toggle_btn.setFixedHeight(36)
         self._toggle_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -136,14 +131,13 @@ class AIChatPanel(QWidget):
         self._update_toggle_style(expanded=False)
         self._main_layout.addWidget(self._toggle_btn)
 
-        # ── İnce ayırıcı ──────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background: {BORDER_COLOR}; border: none;")
         self._main_layout.addWidget(sep)
 
-        # ── Genişletilmiş içerik (başlangıçta gizli) ──────────────────────
+        # Geniş İçerik
         self._content_widget = QWidget()
         self._content_widget.setVisible(False)
         self._content_widget.setStyleSheet("background: transparent;")
@@ -152,17 +146,14 @@ class AIChatPanel(QWidget):
         content_layout.setContentsMargins(12, 12, 12, 12)
         content_layout.setSpacing(10)
 
-        # Baslik
+        # Başlık ve Badge
+        header_layout = QHBoxLayout()
         header_label = QLabel("AI Asistan")
-        header_label.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 700; "
-            f"letter-spacing: 0.5px;"
-        )
-        content_layout.addWidget(header_label)
-
-        # Beta badge
-        beta_label = QLabel("Yakın Zamanda Aktif")
-        beta_label.setStyleSheet(f"""
+        header_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 700; letter-spacing: 0.5px;")
+        header_layout.addWidget(header_label)
+        
+        self.beta_label = QLabel("Aktif Değil")
+        self.beta_label.setStyleSheet(f"""
             QLabel {{
                 background: {ACCENT_RED}22;
                 color: {ACCENT_RED};
@@ -173,47 +164,46 @@ class AIChatPanel(QWidget):
                 font-weight: 600;
             }}
         """)
-        beta_label.setFixedHeight(22)
-        content_layout.addWidget(beta_label)
+        self.beta_label.setFixedHeight(22)
+        header_layout.addWidget(self.beta_label)
+        header_layout.addStretch()
+        content_layout.addLayout(header_layout)
 
-        # Öneri soruları
-        hint_label = QLabel("Örnek sorular:")
-        hint_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; margin-top: 4px;")
-        content_layout.addWidget(hint_label)
+        # İndirme Ekranı (Model Yoksa)
+        self._download_widget = QWidget()
+        dl_layout = QVBoxLayout(self._download_widget)
+        dl_layout.setContentsMargins(0,0,0,0)
+        
+        dl_info = QLabel("AI Asistanı kullanabilmek için yerel modelin (~1.9 GB) indirilmesi gerekiyor. Bu işlem sadece bir kez yapılacaktır.")
+        dl_info.setWordWrap(True)
+        dl_info.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        dl_layout.addWidget(dl_info)
+        
+        self.dl_btn = QPushButton("Modeli İndir")
+        self.dl_btn.setStyleSheet(f"background: {ACCENT_RED}; color: white; border-radius: 4px; padding: 6px;")
+        self.dl_btn.clicked.connect(self._start_download)
+        dl_layout.addWidget(self.dl_btn)
+        
+        self.dl_progress = QProgressBar()
+        self.dl_progress.setVisible(False)
+        self.dl_progress.setStyleSheet(f"""
+            QProgressBar {{ border: 1px solid {BORDER_COLOR}; border-radius: 4px; text-align: center; color: white; }}
+            QProgressBar::chunk {{ background-color: {ACCENT_RED}; }}
+        """)
+        dl_layout.addWidget(self.dl_progress)
+        
+        self.dl_status = QLabel("")
+        self.dl_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        dl_layout.addWidget(self.dl_status)
+        
+        content_layout.addWidget(self._download_widget)
 
-        for q in SAMPLE_QUESTIONS:
-            q_btn = QPushButton(q)
-            q_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            q_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {GLASS_BG};
-                    color: {TEXT_SECONDARY};
-                    border: 1px solid {GLASS_BORDER};
-                    border-radius: 8px;
-                    padding: 6px 8px;
-                    text-align: left;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background: {ACCENT_RED}15;
-                    border-color: {ACCENT_RED}44;
-                    color: {TEXT_PRIMARY};
-                }}
-            """)
-            q_btn.clicked.connect(lambda _, q=q: self._set_input_text(q))
-            content_layout.addWidget(q_btn)
-
-        content_layout.addStretch()
-
-        # ── Chat geçmişi scroll alanı ─────────────────────────────────────
+        # Chat Geçmişi
         self._chat_scroll = QScrollArea()
         self._chat_scroll.setWidgetResizable(True)
         self._chat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._chat_scroll.setStyleSheet("""
-            QScrollArea { background: transparent; border: none; }
-        """)
-        self._chat_scroll.setVisible(False)  # İlk mesaja kadar gizli
-
+        self._chat_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        
         self._chat_container = QWidget()
         self._chat_container.setStyleSheet("background: transparent;")
         self._chat_layout = QVBoxLayout(self._chat_container)
@@ -223,118 +213,181 @@ class AIChatPanel(QWidget):
         self._chat_scroll.setWidget(self._chat_container)
         content_layout.addWidget(self._chat_scroll)
 
-        # ── Giriş alanı ───────────────────────────────────────────────────
-        input_layout = QHBoxLayout()
+        # Soru Önerileri (Sadece Model Varken ve Chat Boşken)
+        self._suggestions_widget = QWidget()
+        sugg_layout = QVBoxLayout(self._suggestions_widget)
+        sugg_layout.setContentsMargins(0,0,0,0)
+        sugg_label = QLabel("Örnek sorular:")
+        sugg_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        sugg_layout.addWidget(sugg_label)
+        for q in SAMPLE_QUESTIONS:
+            btn = QPushButton(q)
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {GLASS_BG}; color: {TEXT_SECONDARY};
+                    border: 1px solid {GLASS_BORDER}; border-radius: 8px;
+                    padding: 6px 8px; text-align: left; font-size: 11px;
+                }}
+                QPushButton:hover {{
+                    background: {ACCENT_RED}15; border-color: {ACCENT_RED}44; color: {TEXT_PRIMARY};
+                }}
+            """)
+            btn.clicked.connect(lambda _, text=q: self._set_input_text(text))
+            sugg_layout.addWidget(btn)
+        content_layout.addWidget(self._suggestions_widget)
+
+        # Giriş Alanı
+        self.input_layout_widget = QWidget()
+        input_layout = QHBoxLayout(self.input_layout_widget)
+        input_layout.setContentsMargins(0,0,0,0)
         input_layout.setSpacing(6)
 
         self._chat_input = QLineEdit()
-        self._chat_input.setObjectName("chatInput")
         self._chat_input.setPlaceholderText("Günlüğüne sor...")
         self._chat_input.setFixedHeight(36)
         self._chat_input.returnPressed.connect(self._send_message)
         input_layout.addWidget(self._chat_input, stretch=1)
 
-        send_btn = QPushButton(">")
-        send_btn.setFixedSize(36, 36)
-        send_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        send_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENT_RED};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 18px;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                background: #F05555;
-            }}
-            QPushButton:pressed {{
-                background: #A02828;
-            }}
+        self.send_btn = QPushButton(">")
+        self.send_btn.setFixedSize(36, 36)
+        self.send_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.send_btn.setStyleSheet(f"""
+            QPushButton {{ background: {ACCENT_RED}; color: #FFFFFF; border: none; border-radius: 18px; font-size: 14px; }}
+            QPushButton:hover {{ background: #F05555; }}
+            QPushButton:pressed {{ background: #A02828; }}
+            QPushButton:disabled {{ background: {BORDER_COLOR}; color: {TEXT_MUTED}; }}
         """)
-        send_btn.clicked.connect(self._send_message)
-        input_layout.addWidget(send_btn)
-
-        content_layout.addLayout(input_layout)
+        self.send_btn.clicked.connect(self._send_message)
+        input_layout.addWidget(self.send_btn)
+        
+        content_layout.addWidget(self.input_layout_widget)
 
         self._main_layout.addWidget(self._content_widget, stretch=1)
 
-    def _update_toggle_style(self, expanded: bool) -> None:
-        """Toggle butonunu açık/kapalı durumuna göre günceller."""
-        if expanded:
-            self._toggle_btn.setText("✕")
-            self._toggle_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {ACCENT_RED_BG};
-                    color: {ACCENT_RED};
-                    border: 1px solid rgba(232,69,69,0.3);
-                    border-radius: 0;
-                    font-size: 15px;
-                    padding: 0;
-                }}
-                QPushButton:hover {{
-                    background: rgba(232,69,69,0.2);
-                    color: #FF6666;
+    def _check_model_status(self):
+        if os.path.exists(MODEL_PATH):
+            self._download_widget.setVisible(False)
+            self.input_layout_widget.setVisible(True)
+            self._suggestions_widget.setVisible(True)
+            self.beta_label.setText("Aktif")
+            self.beta_label.setStyleSheet(f"""
+                QLabel {{
+                    background: #28a74522; color: #28a745;
+                    border: 1px solid #28a74544; border-radius: 8px;
+                    padding: 2px 8px; font-size: 10px; font-weight: 600;
                 }}
             """)
         else:
-            self._toggle_btn.setText("🤖")
+            self._download_widget.setVisible(True)
+            self.input_layout_widget.setVisible(False)
+            self._suggestions_widget.setVisible(False)
+            self._chat_scroll.setVisible(False)
+
+    def _start_download(self):
+        self.dl_btn.setEnabled(False)
+        self.dl_progress.setVisible(True)
+        self.dl_status.setText("İndiriliyor... Lütfen bekleyin.")
+        
+        self.download_worker = ModelDownloadWorker(MODEL_URL, MODEL_PATH)
+        self.download_worker.progress.connect(self.dl_progress.setValue)
+        self.download_worker.finished.connect(self._on_download_finished)
+        self.download_worker.start()
+
+    def _on_download_finished(self, success: bool, message: str):
+        if success:
+            self._check_model_status()
+        else:
+            self.dl_status.setText(message)
+            self.dl_btn.setEnabled(True)
+            self.dl_progress.setVisible(False)
+
+    def _update_toggle_style(self, expanded: bool) -> None:
+        if expanded:
+            self._toggle_btn.setText("✕")
             self._toggle_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: transparent;
-                    color: {TEXT_MUTED};
-                    border: none;
-                    border-radius: 0;
-                    font-size: 20px;
-                    padding: 0;
-                }}
-                QPushButton:hover {{
-                    color: {ACCENT_RED};
-                    background: {ACCENT_RED_BG};
-                }}
+                QPushButton {{ background: {ACCENT_RED_BG}; color: {ACCENT_RED}; border: 1px solid rgba(232,69,69,0.3); border-radius: 0; font-size: 15px; padding: 0; }}
+                QPushButton:hover {{ background: rgba(232,69,69,0.2); color: #FF6666; }}
+            """)
+        else:
+            self._toggle_btn.setText("AI")
+            self._toggle_btn.setStyleSheet(f"""
+                QPushButton {{ background: transparent; color: {TEXT_MUTED}; border: none; border-radius: 0; font-size: 16px; padding: 0; font-weight: bold; }}
+                QPushButton:hover {{ color: {ACCENT_RED}; background: {ACCENT_RED_BG}; }}
             """)
 
     def toggle(self) -> None:
-        """Paneli açar veya kapatır (animasyonlu)."""
         self._is_expanded = not self._is_expanded
-
         if self._is_expanded:
             self.setFixedWidth(self.EXPANDED_WIDTH)
             self._content_widget.setVisible(True)
         else:
             self.setFixedWidth(self.COLLAPSED_WIDTH)
             self._content_widget.setVisible(False)
-
         self._update_toggle_style(self._is_expanded)
 
     def _set_input_text(self, text: str) -> None:
-        """Örnek soruyu giriş alanına yazar."""
         self._chat_input.setText(text)
         self._chat_input.setFocus()
 
     def _send_message(self) -> None:
-        """Kullanıcı mesajını gönderir ve placeholder yanıt üretir."""
-        global _response_index
         text = self._chat_input.text().strip()
-        if not text:
+        if not text or not self.rag_engine:
             return
 
-        # Chat geçmişini göster
+        self._suggestions_widget.setVisible(False)
         self._chat_scroll.setVisible(True)
-
-        # Kullanıcı balonunu ekle
-        self._add_bubble(text, is_user=True)
+        
+        # UI Kilit
         self._chat_input.clear()
-        self.message_sent.emit(text)
+        self._chat_input.setEnabled(False)
+        self.send_btn.setEnabled(False)
 
-        # Placeholder AI yanıtını gecikmeli ekle
-        response = PLACEHOLDER_RESPONSES[_response_index % len(PLACEHOLDER_RESPONSES)]
-        _response_index += 1
-        QTimer.singleShot(600, lambda: self._add_bubble(response, is_user=False))
+        # Kullanıcı mesajını ekle
+        self._add_bubble(text, is_user=True)
+        
+        # Mevcut soruyu ve boş yanıt değişkenini kaydet
+        self._current_user_query = text
+        self._current_ai_response = ""
 
-    def _add_bubble(self, text: str, is_user: bool) -> None:
-        """Chat geçmişine mesaj balonu ekler."""
-        # Stretch'i kaldır, balonu ekle, tekrar ekle
+        # AI yanıtı için boş balon oluştur
+        self._current_ai_bubble = self._add_bubble("...", is_user=False)
+
+        # Arka planda çalıştır — sohbet geçmişini de gönder
+        self.chat_worker = RAGChatWorker(self.rag_engine, text, self._chat_history.copy())
+        self.chat_worker.token_received.connect(self._on_token_received)
+        self.chat_worker.finished.connect(self._on_chat_finished)
+        self.chat_worker.error.connect(self._on_chat_error)
+        self.chat_worker.start()
+
+    def _on_token_received(self, token: str):
+        if self._current_ai_bubble:
+            # İlk token geldiğinde "..." sil
+            if self._current_ai_bubble.label.text() == "...":
+                self._current_ai_bubble.label.setText("")
+            self._current_ai_bubble.append_text(token)
+            self._current_ai_response += token  # Tam yanıtı biriktir
+            self._scroll_to_bottom()
+
+    def _on_chat_finished(self):
+        # Tamamlanan soru-cevap çiftini geçmişe ekle
+        if self._current_user_query and self._current_ai_response:
+            self._chat_history.append({"role": "user", "content": self._current_user_query})
+            self._chat_history.append({"role": "assistant", "content": self._current_ai_response})
+        
+        self._chat_input.setEnabled(True)
+        self.send_btn.setEnabled(True)
+        self._chat_input.setFocus()
+        self._current_ai_bubble = None
+        self._current_user_query = ""
+        self._current_ai_response = ""
+
+    def _on_chat_error(self, error_msg: str):
+        if self._current_ai_bubble:
+            self._current_ai_bubble.label.setText(f"Hata oluştu: {error_msg}")
+        self._on_chat_finished()
+
+    def _add_bubble(self, text: str, is_user: bool) -> ChatBubble:
         count = self._chat_layout.count()
         if count > 0:
             stretch_item = self._chat_layout.takeAt(count - 1)
@@ -342,11 +395,10 @@ class AIChatPanel(QWidget):
         bubble = ChatBubble(text, is_user)
         self._chat_layout.addWidget(bubble)
         self._chat_layout.addStretch()
+        self._scroll_to_bottom()
+        return bubble
 
-        # En alta kaydır
+    def _scroll_to_bottom(self):
         QTimer.singleShot(50, lambda: self._chat_scroll.verticalScrollBar().setValue(
             self._chat_scroll.verticalScrollBar().maximum()
         ))
-
-    def is_expanded(self) -> bool:
-        return self._is_expanded

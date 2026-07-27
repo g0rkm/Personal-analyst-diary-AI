@@ -21,8 +21,11 @@ from database import Database
 from ui.calendar_widget import DiaryCalendar
 from ui.editor_panel import EditorPanel
 from ui.search_dialog import SearchResultDialog
-from ui.ai_chat_panel import AIChatPanel
+from ui.ai_chat_panel import AIChatPanel, MODEL_PATH
 from ui.full_calendar_view import FullCalendarView
+from ai.rag_engine import RAGEngine
+from ai.worker import IndexWorker, MoodAnalysisWorker
+import os
 from ui.styles import (
     MAIN_STYLESHEET,
     BG_DARK, BG_WIDGET, BG_WIDGET_ALT, BG_SIDEBAR, BG_CARD,
@@ -106,6 +109,9 @@ class MainWindow(QMainWindow):
         self.db = Database()
         self._sidebar_expanded = True
         self._current_tab = 0
+        self.rag_engine = None
+        self.index_worker = None
+        self.mood_worker = None
 
         self.setWindowTitle("Günlük — Kişisel Günlük")
         self.setMinimumSize(960, 640)
@@ -270,9 +276,47 @@ class MainWindow(QMainWindow):
 
         # ── Sağ AI paneli ─────────────────────────────────────────────────
         self.ai_panel = AIChatPanel()
+        
+        # Panel açılırken RAGEngine yoksa yükle (Tembel Yükleme)
+        self.ai_panel._toggle_btn.clicked.connect(self._check_ai_init)
+        
         layout.addWidget(self.ai_panel)
 
         return container
+
+    def _check_ai_init(self):
+        """AI Paneli açılırken model varsa RAGEngine'i başlatır."""
+        if self.ai_panel._is_expanded and not self.rag_engine and os.path.exists(MODEL_PATH):
+            self.rag_engine = RAGEngine()
+            self.ai_panel.set_rag_engine(self.rag_engine)
+            
+            # SQLite ile LanceDB arasında senkronizasyon (Eksik kayıtları indeksle)
+            entries = self.db.get_all_entries_content()
+            existing_dates = set()
+            if self.rag_engine.vector_store.table:
+                # Tüm mevcut tarihleri lanceDB'den çek
+                res = self.rag_engine.vector_store.table.search().limit(10000).to_list()
+                existing_dates = {r['date'] for r in res}
+            
+            missing_entries = [e for e in entries if e['date'] not in existing_dates]
+            
+            if missing_entries:
+                self.index_worker = IndexWorker(
+                    self.rag_engine.embedder,
+                    self.rag_engine.vector_store,
+                    missing_entries
+                )
+                self.index_worker.start()
+
+            # Henüz mood_score hesaplanmamış günlükler için toplu mood analizi başlat
+            entries = self.db.get_all_entries_content()
+            if entries:
+                self.mood_worker = MoodAnalysisWorker(
+                    self.rag_engine.llm,
+                    self.db,
+                    entries
+                )
+                self.mood_worker.start()
 
     def _build_toggle_strip(self) -> QWidget:
         """
@@ -444,8 +488,29 @@ class MainWindow(QMainWindow):
         self.editor_panel.load_entry(date_str)
 
     def _on_entry_saved(self, date_str: str, content: str) -> None:
-        """Kayıt sonrası ısı haritasını yeniler."""
+        """Kayıt sonrası ısı haritasını yeniler, vektörleri indeksler ve duygu puanını hesaplar."""
         self._refresh_heatmap()
+        
+        # AI İndeksleme & Duygu Analizi (Model indirilmişse)
+        if os.path.exists(MODEL_PATH):
+            if not self.rag_engine:
+                self.rag_engine = RAGEngine()
+                self.ai_panel.set_rag_engine(self.rag_engine)
+                
+            self.index_worker = IndexWorker(
+                self.rag_engine.embedder,
+                self.rag_engine.vector_store,
+                [{"date": date_str, "content": content}]
+            )
+            self.index_worker.start()
+
+            # Arka planda mood_score hesabı
+            self.mood_worker = MoodAnalysisWorker(
+                self.rag_engine.llm,
+                self.db,
+                [{"date": date_str, "content": content}]
+            )
+            self.mood_worker.start()
 
     def _do_search(self) -> None:
         """Veritabanında arama yapar ve sonuç diyaloğu açar."""

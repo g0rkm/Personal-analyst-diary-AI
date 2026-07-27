@@ -1,1 +1,7 @@
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 PyQt6>=6.4.0
+fastembed>=0.2.7
+lancedb>=0.6.0
+requests>=2.31.0
+huggingface_hub>=0.23.0
+llama-cpp-python>=0.2.75

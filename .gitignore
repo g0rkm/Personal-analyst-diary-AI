@@ -61,3 +61,10 @@ pip-delete-this-directory.txt
 # ── Tarama / analiz dosyaları ─────────────────────────────────────────────────
 scan.txt
 emoji_scan.txt
+
+
+# ── Model'in kendisi ─────────────────────────────────────────────────
+models/
+
+# ── Vektör veritabanı ─────────────────────────────────────────────────
+lance_db/

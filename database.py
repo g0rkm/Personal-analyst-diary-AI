@@ -89,6 +89,13 @@ class Database:
             cursor = conn.execute(sql)
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_all_entries_content(self) -> list[dict]:
+        """Tüm günlük içeriklerini tarih ve içerik olarak döner (İndeksleme için)."""
+        sql = "SELECT date, content FROM entries WHERE content != '' AND content IS NOT NULL"
+        with self._get_connection() as conn:
+            cursor = conn.execute(sql)
+            return [dict(row) for row in cursor.fetchall()]
+
     # ── Yazma ──────────────────────────────────────────────────────────────
 
     def save_entry(self, date: str, content: str,
@@ -109,6 +116,13 @@ class Database:
         """
         with self._get_connection() as conn:
             conn.execute(sql, (date, content, mood_score, happiness_score))
+            conn.commit()
+
+    def update_mood_score(self, date: str, mood_score: int) -> None:
+        """Yapay zeka tarafından hesaplanan duygu puanını (-10..+10) günceller."""
+        sql = "UPDATE entries SET mood_score = ? WHERE date = ?"
+        with self._get_connection() as conn:
+            conn.execute(sql, (mood_score, date))
             conn.commit()
 
     def delete_entry(self, date: str) -> None:
