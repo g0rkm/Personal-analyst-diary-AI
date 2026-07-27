@@ -7,9 +7,13 @@ Model indirme, RAG sohbeti ve veritabanı indeksleme.
 
 import os
 import requests
+from datetime import datetime, timedelta
+import calendar
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from database import Database
 from ai.chunker import chunk_entry
+from ai.report_engine import ReportEngine
 
 class ModelDownloadWorker(QThread):
     """Büyük model dosyasını arka planda indirir ve ilerlemeyi bildirir."""
@@ -59,22 +63,107 @@ class ModelDownloadWorker(QThread):
             self.finished.emit(False, f"Hata: {str(e)}")
 
 class RAGChatWorker(QThread):
-    """RAG üzerinden soru sorup gelen cevabı UI'ye stream eder."""
+    """RAG veya SQL çekimi üzerinden soru sorup gelen cevabı UI'ye stream eder."""
     token_received = pyqtSignal(str)
-    finished = pyqtSignal()
+    mode_detected = pyqtSignal(str, str) # (mode, loading_message)
+    finished = pyqtSignal(object) # Yeni last_date_range dönmek için
     error = pyqtSignal(str)
     
-    def __init__(self, rag_engine, user_query: str, chat_history: list = None):
+    def __init__(self, rag_engine, user_query: str, chat_history: list = None, last_date_range: tuple = None):
         super().__init__()
         self.rag_engine = rag_engine
         self.user_query = user_query
         self.chat_history = chat_history or []
+        self.last_date_range = last_date_range # (start_date, end_date)
+        
+    def _parse_time_range(self, query: str):
+        """Basit bir sorgu yönlendirici. 'geçen ay', 'bu ay' gibi anahtar kelimeleri algılar."""
+        q = query.lower()
+        today = datetime.now()
+        
+        # Basit ay isimleri haritası
+        aylar = {
+            "ocak": 1, "şubat": 2, "mart": 3, "nisan": 4, "mayıs": 5, "haziran": 6,
+            "temmuz": 7, "ağustos": 8, "eylül": 9, "ekim": 10, "kasım": 11, "aralık": 12
+        }
+        
+        if "geçen ay" in q:
+            first = today.replace(day=1)
+            last_month = first - timedelta(days=1)
+            start_date = last_month.replace(day=1).strftime("%Y-%m-%d")
+            end_date = last_month.strftime("%Y-%m-%d")
+            return (start_date, end_date), "Geçen ayki günlüklerin taranıyor..."
+            
+        elif "bu ay" in q:
+            start_date = today.replace(day=1).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
+            return (start_date, end_date), "Bu ayki günlüklerin taranıyor..."
+            
+        elif "geçen hafta" in q:
+            start_date = (today - timedelta(days=today.weekday() + 7)).strftime("%Y-%m-%d")
+            end_date = (today - timedelta(days=today.weekday() + 1)).strftime("%Y-%m-%d")
+            return (start_date, end_date), "Geçen haftaki günlüklerin taranıyor..."
+            
+        elif "bu hafta" in q:
+            start_date = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
+            return (start_date, end_date), "Bu haftaki günlüklerin taranıyor..."
+            
+        # Ay isimlerini kontrol et
+        for ay_adi, ay_no in aylar.items():
+            if ay_adi in q:
+                # O ayın ilk günü ve son gününü bul
+                start_date = today.replace(month=ay_no, day=1).strftime("%Y-%m-%d")
+                son_gun = calendar.monthrange(today.year, ay_no)[1]
+                
+                # Eğer o ay şu anki aysa, sadece bugüne kadar olanı al
+                if ay_no == today.month:
+                    end_date = today.strftime("%Y-%m-%d")
+                else:
+                    end_date = today.replace(month=ay_no, day=son_gun).strftime("%Y-%m-%d")
+                    
+                return (start_date, end_date), f"{ay_adi.capitalize()} ayı günlüklerin taranıyor..."
+                
+        return None, None
         
     def run(self):
         try:
-            for token in self.rag_engine.chat_stream(self.user_query, self.chat_history):
-                self.token_received.emit(token)
-            self.finished.emit()
+            # 1. Yeni bir tarih aralığı soruluyor mu?
+            date_range, loading_msg = self._parse_time_range(self.user_query)
+            
+            # 2. Eğer yeni bir tarih sorulmuyorsa ama önceki soru takvimle ilgiliyse bağlamı koru
+            if not date_range and self.last_date_range:
+                # "Neden kötüymüşüm?" gibi takip eden sorular için
+                date_range = self.last_date_range
+                loading_msg = "Günlüklerin taranıyor..."
+                
+            if date_range:
+                # ROUTE 1: SQL Tabanlı Zaman Analizi (Report Engine Mantığı)
+                self.mode_detected.emit("SQL", loading_msg)
+                
+                db = Database()
+                report_engine = ReportEngine(self.rag_engine.llm)
+                
+                # Tüm dönemi okuyup spesifik soruya (user_query) cevap verecek
+                stream = report_engine.generate_report_stream(
+                    start_date=date_range[0],
+                    end_date=date_range[1],
+                    db=db,
+                    user_question=self.user_query
+                )
+                
+                for token in stream:
+                    self.token_received.emit(token)
+                    
+                self.finished.emit(date_range)
+                
+            else:
+                # ROUTE 2: Normal Vektör Arama (RAG)
+                self.mode_detected.emit("RAG", "Düşünüyor...")
+                for token in self.rag_engine.chat_stream(self.user_query, self.chat_history):
+                    self.token_received.emit(token)
+                self.finished.emit(None)
+                
         except Exception as e:
             self.error.emit(str(e))
 

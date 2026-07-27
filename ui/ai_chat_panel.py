@@ -98,6 +98,12 @@ class AIChatPanel(QWidget):
         self._chat_history = []  # Sohbet geçmişi — modelin bağlamı takip etmesi için
         self._current_user_query = ""  # Yanıt tamamlandığında geçmişe eklemek için
         self._current_ai_response = ""  # Streaming sırasında toplanan tam yanıt
+        self.last_date_range = None  # Kontekst hafızası (SQL yönlendirme için)
+        
+        self._thinking_timer = QTimer(self)
+        self._thinking_timer.timeout.connect(self._update_thinking_animation)
+        self._thinking_dots = 0
+        self._thinking_base_text = "Düşünüyor"
         
         self._setup_ui()
         self.setFixedWidth(self.COLLAPSED_WIDTH)
@@ -351,25 +357,45 @@ class AIChatPanel(QWidget):
         self._current_ai_response = ""
 
         # AI yanıtı için boş balon oluştur
-        self._current_ai_bubble = self._add_bubble("...", is_user=False)
+        self._thinking_base_text = "Düşünüyor"
+        self._current_ai_bubble = self._add_bubble(self._thinking_base_text, is_user=False)
+        
+        # Düşünme animasyonunu başlat
+        self._thinking_dots = 0
+        self._thinking_timer.start(400)
 
-        # Arka planda çalıştır — sohbet geçmişini de gönder
-        self.chat_worker = RAGChatWorker(self.rag_engine, text, self._chat_history.copy())
+        # Arka planda çalıştır — sohbet geçmişini ve aktif zaman aralığını da gönder
+        self.chat_worker = RAGChatWorker(self.rag_engine, text, self._chat_history.copy(), self.last_date_range)
         self.chat_worker.token_received.connect(self._on_token_received)
+        self.chat_worker.mode_detected.connect(self._on_mode_detected)
         self.chat_worker.finished.connect(self._on_chat_finished)
         self.chat_worker.error.connect(self._on_chat_error)
         self.chat_worker.start()
 
+    def _on_mode_detected(self, mode: str, loading_message: str):
+        self._thinking_base_text = loading_message
+        if self._current_ai_bubble and self._current_ai_response == "":
+            self._current_ai_bubble.label.setText(self._thinking_base_text)
+
+    def _update_thinking_animation(self):
+        if self._current_ai_bubble and self._current_ai_response == "":
+            self._thinking_dots = (self._thinking_dots + 1) % 4
+            self._current_ai_bubble.label.setText(self._thinking_base_text + "." * self._thinking_dots)
+
     def _on_token_received(self, token: str):
         if self._current_ai_bubble:
-            # İlk token geldiğinde "..." sil
-            if self._current_ai_bubble.label.text() == "...":
+            # İlk token geldiğinde timer'ı durdur ve metni temizle
+            if self._current_ai_response == "":
+                self._thinking_timer.stop()
                 self._current_ai_bubble.label.setText("")
+                
             self._current_ai_bubble.append_text(token)
             self._current_ai_response += token  # Tam yanıtı biriktir
             self._scroll_to_bottom()
 
-    def _on_chat_finished(self):
+    def _on_chat_finished(self, new_date_range=None):
+        self._thinking_timer.stop()
+        self.last_date_range = new_date_range
         # Tamamlanan soru-cevap çiftini geçmişe ekle
         if self._current_user_query and self._current_ai_response:
             self._chat_history.append({"role": "user", "content": self._current_user_query})
@@ -383,6 +409,7 @@ class AIChatPanel(QWidget):
         self._current_ai_response = ""
 
     def _on_chat_error(self, error_msg: str):
+        self._thinking_timer.stop()
         if self._current_ai_bubble:
             self._current_ai_bubble.label.setText(f"Hata oluştu: {error_msg}")
         self._on_chat_finished()

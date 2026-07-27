@@ -96,6 +96,21 @@ class Database:
             cursor = conn.execute(sql)
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_entries_by_date_range(self, start_date: str, end_date: str) -> list[dict]:
+        """
+        Belirtilen tarih aralığındaki tüm kayıtları kronolojik sırayla döner.
+        Raporlama ve özet motoru (ReportEngine) için kullanılır.
+        """
+        sql = """
+        SELECT date, content, mood_score, happiness_score 
+        FROM entries 
+        WHERE date >= ? AND date <= ? AND content != '' AND content IS NOT NULL
+        ORDER BY date ASC
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(sql, (start_date, end_date))
+            return [dict(row) for row in cursor.fetchall()]
+
     # ── Yazma ──────────────────────────────────────────────────────────────
 
     def save_entry(self, date: str, content: str,
