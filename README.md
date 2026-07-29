@@ -18,7 +18,7 @@ Tüm yapay zeka işlemleri (LLM çıkarımları ve vektör aramaları) tamamen k
 
 ### 🔍 Akıllı Yönlendirici (Smart Query Router)
 Sadece anahtar kelime araması değil, bağlam ve zaman farkındalığına sahip hibrit bir sohbet altyapısı:
-- **Spesifik Anı Arama (RAG):** *"Geçen ay Behzat Ç'yi ne zaman bitirmiştim?"* gibi sorularda LanceDB (Vektör Veritabanı) devreye girerek semantik eşleşme bulur.
+- **Spesifik Anı Arama (RAG):** *"Geçen ay spora ne zaman başlamıştım?"* gibi sorularda LanceDB (Vektör Veritabanı) devreye girerek semantik eşleşme bulur.
 - **Zaman Bazlı Raporlama (SQL):** *"Geçen ay ruh halim nasıldı?"* veya *"Bu hafta en çok neyi erteledim?"* dediğinizde, sistem zaman dilimini algılar ve arama motorunu devre dışı bırakarak o ayın tamamını okuyup size özel bir analiz raporu çıkarır.
 - **Sohbet Hafızası:** Ardışık sorularda (Örn: *"Peki neden böyle hissetmişim?"*) bağlamı ve zamanı hatırlar.
 
