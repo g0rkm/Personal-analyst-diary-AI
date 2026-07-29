@@ -21,7 +21,8 @@ from database import Database
 from ui.calendar_widget import DiaryCalendar
 from ui.editor_panel import EditorPanel
 from ui.search_dialog import SearchResultDialog
-from ui.ai_chat_panel import AIChatPanel, MODEL_PATH
+from ui.ai_chat_panel import AIChatPanel
+from settings import load_settings
 from ui.full_calendar_view import FullCalendarView
 from ai.rag_engine import RAGEngine
 from ai.worker import IndexWorker, MoodAnalysisWorker
@@ -286,7 +287,9 @@ class MainWindow(QMainWindow):
 
     def _check_ai_init(self):
         """AI Paneli açılırken model varsa RAGEngine'i başlatır."""
-        if self.ai_panel._is_expanded and not self.rag_engine and os.path.exists(MODEL_PATH):
+        settings = load_settings()
+        model_path = settings.get("model_path", "models/qwen2.5-3b-instruct-q4_k_m.gguf")
+        if self.ai_panel._is_expanded and not self.rag_engine and os.path.exists(model_path):
             self.rag_engine = RAGEngine()
             self.ai_panel.set_rag_engine(self.rag_engine)
             
@@ -492,7 +495,9 @@ class MainWindow(QMainWindow):
         self._refresh_heatmap()
         
         # AI İndeksleme & Duygu Analizi (Model indirilmişse)
-        if os.path.exists(MODEL_PATH):
+        settings = load_settings()
+        model_path = settings.get("model_path", "models/qwen2.5-3b-instruct-q4_k_m.gguf")
+        if os.path.exists(model_path):
             if not self.rag_engine:
                 self.rag_engine = RAGEngine()
                 self.ai_panel.set_rag_engine(self.rag_engine)

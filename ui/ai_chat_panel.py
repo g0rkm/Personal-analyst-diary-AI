@@ -22,9 +22,7 @@ from ui.styles import (
 
 from ai.rag_engine import RAGEngine
 from ai.worker import ModelDownloadWorker, RAGChatWorker
-
-MODEL_URL = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
-MODEL_PATH = "models/qwen2.5-3b-instruct-q4_k_m.gguf"
+from settings import load_settings
 
 SAMPLE_QUESTIONS = [
     "Geçen ay en çok neyi erteledim?",
@@ -272,7 +270,9 @@ class AIChatPanel(QWidget):
         self._main_layout.addWidget(self._content_widget, stretch=1)
 
     def _check_model_status(self):
-        if os.path.exists(MODEL_PATH):
+        settings = load_settings()
+        model_path = settings.get("model_path", "models/qwen2.5-3b-instruct-q4_k_m.gguf")
+        if os.path.exists(model_path):
             self._download_widget.setVisible(False)
             self.input_layout_widget.setVisible(True)
             self._suggestions_widget.setVisible(True)
@@ -295,7 +295,11 @@ class AIChatPanel(QWidget):
         self.dl_progress.setVisible(True)
         self.dl_status.setText("İndiriliyor... Lütfen bekleyin.")
         
-        self.download_worker = ModelDownloadWorker(MODEL_URL, MODEL_PATH)
+        settings = load_settings()
+        model_path = settings.get("model_path", "models/qwen2.5-3b-instruct-q4_k_m.gguf")
+        model_url = settings.get("model_url", "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf")
+        
+        self.download_worker = ModelDownloadWorker(model_url, model_path)
         self.download_worker.progress.connect(self.dl_progress.setValue)
         self.download_worker.finished.connect(self._on_download_finished)
         self.download_worker.start()

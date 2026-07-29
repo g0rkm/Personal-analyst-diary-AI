@@ -13,7 +13,9 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settin
 
 # Varsayılan ayarlar (settings.json bulunamazsa kullanılır)
 _DEFAULTS = {
-    "db_path": "diary.db"
+    "db_path": "diary.db",
+    "model_path": "models/qwen2.5-3b-instruct-q4_k_m.gguf",
+    "model_url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
 }
 
 

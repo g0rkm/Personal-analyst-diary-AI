@@ -13,10 +13,16 @@ Bu yüzden tüm erişimler threading.Lock ile sıraya alınır.
 import os
 import threading
 from llama_cpp import Llama
+from settings import load_settings
 
 class LlamaEngine:
-    def __init__(self, model_path: str = "models/qwen2.5-3b-instruct-q4_k_m.gguf", gpu_layers: int = 0):
-        self.model_path = model_path
+    def __init__(self, model_path: str = None, gpu_layers: int = 0):
+        if model_path is None:
+            settings = load_settings()
+            self.model_path = settings.get("model_path", "models/qwen2.5-3b-instruct-q4_k_m.gguf")
+        else:
+            self.model_path = model_path
+            
         self.gpu_layers = gpu_layers
         self.llm = None
         self._lock = threading.Lock()  # C++ nesnesine eşzamanlı erişimi engeller
