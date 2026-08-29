@@ -1,0 +1,46 @@
+###############################################################################
+# Personal Analyst — Docker Compose
+#
+#   docker compose up --build      -> imajı derler ve uygulamayı başlatır
+#   Tarayıcıdan aç:  http://localhost:6080
+###############################################################################
+
+services:
+  diary:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Açıkça belirtilir: Dockerfile'daki son aşama "tests"tir,
+      # uygulama imajı ondan değil "runtime" aşamasından derlenmelidir.
+      target: runtime
+    image: personal-analyst-diary:latest
+    container_name: personal-analyst-diary
+
+    ports:
+      - "127.0.0.1:6080:6080"   # noVNC — tarayıcı arayüzü
+      - "127.0.0.1:5900:5900"   # ham VNC — harici VNC istemcisi kullanmak isteyenler için
+
+    environment:
+      # Sanal ekran çözünürlüğü (genişlikxyükseklikxrenk derinliği)
+      SCREEN_GEOMETRY: "1400x900x24"
+      # Portları 127.0.0.1 dışına açacaksanız parola tanımlayın:
+      # VNC_PASSWORD: "guclu-bir-parola"
+
+    volumes:
+      # Günlük verisi (SQLite + LanceDB) — host'tan da erişilebilsin diye bind mount
+      - ./data:/app/data
+      # ~1.9 GB'lık GGUF modeli — imaj yeniden derlense bile korunur
+      - diary-models:/app/models
+      # fastembed / HuggingFace model önbelleği (~220 MB)
+      - diary-cache:/app/cache
+
+    # Qt'nin paylaşımlı bellek (MIT-SHM) kullanımı için
+    shm_size: "256mb"
+
+    # Uygulama kapatıldığında konteyner de kapansın, yeniden başlamasın
+    restart: "no"
+    stop_grace_period: 20s
+
+volumes:
+  diary-models:
+  diary-cache:
