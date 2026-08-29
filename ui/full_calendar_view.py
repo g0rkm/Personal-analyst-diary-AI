@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QDate
 from PyQt6.QtGui import QFont, QColor
 
+from core.date_utils import format_day_and_date
 from ui.calendar_widget import DiaryCalendar
 from ui.styles import (
     BG_DARK, BG_WIDGET, BG_CARD,
@@ -213,20 +214,9 @@ class FullCalendarView(QWidget):
     def _on_selection_changed(self) -> None:
         """Tek tıkla sağ bilgi panelini güncelle."""
         date_str = self.calendar.get_selected_date_str()
-        qdate = QDate.fromString(date_str, "yyyy-MM-dd")
 
-        # Türkçe tarih formatı
-        turkish_months = [
-            "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
-            "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
-        ]
-        day_names = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
-
-        if qdate.isValid():
-            day_name = day_names[qdate.dayOfWeek() - 1]
-            month    = turkish_months[qdate.month() - 1]
-            friendly = f"{day_name}\n{qdate.day()} {month} {qdate.year()}"
-            self._selected_date_label.setText(friendly)
+        # Türkçe tarih biçimi — ay/gün adları core.date_utils'te tek kaynakta
+        self._selected_date_label.setText(format_day_and_date(date_str))
 
         # Kayıt durumu
         entry = self.db.get_entry(date_str)

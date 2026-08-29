@@ -12,9 +12,10 @@ from PyQt6.QtWidgets import (
     QLabel, QListWidget, QListWidgetItem,
     QPushButton, QFrame
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QDate
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
+from core.date_utils import format_short
 from ui.styles import (
     BG_DARK, BG_WIDGET, BG_WIDGET_ALT,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -90,8 +91,8 @@ class SearchResultDialog(QDialog):
                 content  = result["content"]
 
                 # Tarihi daha okunabilir formata çevir
-                qdate = QDate.fromString(date_str, "yyyy-MM-dd")
-                friendly_date = qdate.toString("d MMMM yyyy") if qdate.isValid() else date_str
+                # (core.date_utils sistem yerelinden bağımsız Türkçe üretir)
+                friendly_date = format_short(date_str)
 
                 # İçerikten kısa önizleme oluştur
                 preview = content.replace("\n", " ").strip()
@@ -115,7 +116,7 @@ class SearchResultDialog(QDialog):
             layout.addWidget(hint_label)
         else:
             # Sonuç yoksa bilgilendirme mesajı
-            empty_label = QLabel("Bu kelimeyle eslesen kayit bulunamadi.")
+            empty_label = QLabel("Bu kelimeyle eşleşen kayıt bulunamadı.")
             empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_label.setStyleSheet(
                 f"color: {TEXT_MUTED}; font-size: 14px; padding: 40px;"
