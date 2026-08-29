@@ -12,7 +12,7 @@ Sol sidebar açılır-kapanır; toggle butonu her zaman görünür şeritte kal�
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton,
-    QFrame, QStackedWidget
+    QFrame, QStackedWidget, QMessageBox
 )
 from PyQt6.QtCore import Qt, QDate, QTimer, QSize
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QLinearGradient, QColor, QPainter
@@ -22,6 +22,7 @@ from ui.calendar_widget import DiaryCalendar
 from ui.editor_panel import EditorPanel
 from ui.search_dialog import SearchResultDialog
 from ui.ai_chat_panel import AIChatPanel
+from core.date_utils import format_short
 from settings import load_settings
 from ui.full_calendar_view import FullCalendarView
 from ai.rag_engine import RAGEngine
@@ -111,8 +112,14 @@ class MainWindow(QMainWindow):
         self._sidebar_expanded = True
         self._current_tab = 0
         self.rag_engine = None
-        self.index_worker = None
-        self.mood_worker = None
+        # Çalışan QThread'ler burada tutulur. Tek bir alana atanırlarsa
+        # (self.index_worker = ...) bir sonraki atama önceki thread'in son
+        # referansını düşürür ve Qt "QThread: Destroyed while thread is still
+        # running" ile çökebilir.
+        self._active_workers: set = set()
+        # Gün değiştirirken kaydedilmemiş metin uyarısının kendini
+        # tetiklemesini engelleyen bayrak
+        self._suppress_date_change = False
 
         self.setWindowTitle("Günlük — Kişisel Günlük")
         self.setMinimumSize(960, 640)
@@ -293,33 +300,37 @@ class MainWindow(QMainWindow):
             self.rag_engine = RAGEngine()
             self.ai_panel.set_rag_engine(self.rag_engine)
             
-            # SQLite ile LanceDB arasında senkronizasyon (Eksik kayıtları indeksle)
+            # SQLite ile LanceDB arasında senkronizasyon (eksik kayıtları indeksle)
             entries = self.db.get_all_entries_content()
-            existing_dates = set()
-            if self.rag_engine.vector_store.table:
-                # Tüm mevcut tarihleri lanceDB'den çek
-                res = self.rag_engine.vector_store.table.search().limit(10000).to_list()
-                existing_dates = {r['date'] for r in res}
-            
-            missing_entries = [e for e in entries if e['date'] not in existing_dates]
-            
+            indexed_dates = self.rag_engine.vector_store.get_indexed_dates()
+            missing_entries = [e for e in entries if e["date"] not in indexed_dates]
+
             if missing_entries:
-                self.index_worker = IndexWorker(
+                self._start_worker(IndexWorker(
                     self.rag_engine.embedder,
                     self.rag_engine.vector_store,
                     missing_entries
-                )
-                self.index_worker.start()
+                ))
 
-            # Henüz mood_score hesaplanmamış günlükler için toplu mood analizi başlat
-            entries = self.db.get_all_entries_content()
-            if entries:
-                self.mood_worker = MoodAnalysisWorker(
+            # Yalnızca duygu puanı HENÜZ hesaplanmamış günlükleri analiz et.
+            # Eskiden tüm kayıtlar gönderiliyordu; panel her açıldığında bütün
+            # günlükler baştan LLM'e veriliyor ve gereksiz yere uzun sürüyordu.
+            pending_mood = self.db.get_entries_without_mood()
+            if pending_mood:
+                self._start_worker(MoodAnalysisWorker(
                     self.rag_engine.llm,
                     self.db,
-                    entries
-                )
-                self.mood_worker.start()
+                    pending_mood
+                ))
+
+    def _start_worker(self, worker) -> None:
+        """
+        Arka plan QThread'ini başlatır ve bitene kadar referansını tutar.
+        Bittiğinde kümeden düşürülür, böylece bellekte birikmez.
+        """
+        self._active_workers.add(worker)
+        worker.finished.connect(lambda *_, w=worker: self._active_workers.discard(w))
+        worker.start()
 
     def _build_toggle_strip(self) -> QWidget:
         """
@@ -486,9 +497,65 @@ class MainWindow(QMainWindow):
     # ── Olay İşleyicileri ────────────────────────────────────────────────────
 
     def _on_date_selected(self) -> None:
-        """Takvimde farklı bir güne tıklandığında editörü günceller."""
+        """
+        Takvimde farklı bir güne tıklandığında editörü günceller.
+
+        Yeni günü yüklemeden önce kaydedilmemiş yazı olup olmadığı kontrol
+        edilir. Eskiden metin uyarısızca siliniyordu — bir günlük uygulaması
+        için en ağır hata buydu.
+        """
+        if self._suppress_date_change:
+            return
+
         date_str = self.calendar.get_selected_date_str()
+        previous_date = self.editor_panel.get_current_date()
+
+        if date_str != previous_date and self.editor_panel.is_dirty():
+            if not self._handle_unsaved_changes(previous_date):
+                # Kullanıcı vazgeçti ya da kayıt engellendi: eski güne dön
+                self._restore_calendar_date(previous_date)
+                return
+
         self.editor_panel.load_entry(date_str)
+
+    def _handle_unsaved_changes(self, date_str: str) -> bool:
+        """
+        Kaydedilmemiş değişiklikler için kullanıcıya sorar.
+        Gün değiştirmeye devam edilebilirse True, edilemezse False döner.
+        """
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Kaydedilmemiş Yazı")
+        msg.setText(f"<b>{format_short(date_str)}</b> için kaydedilmemiş bir yazın var.")
+        msg.setInformativeText("Başka bir güne geçmeden önce kaydedilsin mi?")
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.Save)
+        msg.button(QMessageBox.StandardButton.Save).setText("Kaydet")
+        msg.button(QMessageBox.StandardButton.Discard).setText("Kaydetme")
+        msg.button(QMessageBox.StandardButton.Cancel).setText("Vazgeç")
+
+        choice = msg.exec()
+
+        if choice == QMessageBox.StandardButton.Discard:
+            return True
+        if choice == QMessageBox.StandardButton.Save:
+            # Puan verilmemişse save_entry False döner; kullanıcı o günde kalır
+            return self.editor_panel.save_entry()
+        return False
+
+    def _restore_calendar_date(self, date_str: str) -> None:
+        """Takvim seçimini sessizce eski güne döndürür (sinyal tetiklenmez)."""
+        qdate = QDate.fromString(date_str, "yyyy-MM-dd")
+        if not qdate.isValid():
+            return
+        self._suppress_date_change = True
+        try:
+            self.calendar.setSelectedDate(qdate)
+        finally:
+            self._suppress_date_change = False
 
     def _on_entry_saved(self, date_str: str, content: str) -> None:
         """Kayıt sonrası ısı haritasını yeniler, vektörleri indeksler ve duygu puanını hesaplar."""
@@ -502,20 +569,18 @@ class MainWindow(QMainWindow):
                 self.rag_engine = RAGEngine()
                 self.ai_panel.set_rag_engine(self.rag_engine)
                 
-            self.index_worker = IndexWorker(
+            self._start_worker(IndexWorker(
                 self.rag_engine.embedder,
                 self.rag_engine.vector_store,
                 [{"date": date_str, "content": content}]
-            )
-            self.index_worker.start()
+            ))
 
             # Arka planda mood_score hesabı
-            self.mood_worker = MoodAnalysisWorker(
+            self._start_worker(MoodAnalysisWorker(
                 self.rag_engine.llm,
                 self.db,
                 [{"date": date_str, "content": content}]
-            )
-            self.mood_worker.start()
+            ))
 
     def _do_search(self) -> None:
         """Veritabanında arama yapar ve sonuç diyaloğu açar."""

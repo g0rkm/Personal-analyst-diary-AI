@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTimer
 from PyQt6.QtGui import QFont, QKeySequence, QTextCursor
 
+from core.date_utils import format_long, format_short, upper_tr
 from ui.rating_widget import RatingWidget
 from ui.suggestion_widget import SuggestionWidget
 from ui.styles import (
@@ -68,6 +69,9 @@ class EditorPanel(QWidget):
         self.db = db
         self._current_date: str = QDate.currentDate().toString("yyyy-MM-dd")
         self._is_loading: bool = False
+        # Kaydedilmemiş değişiklik tespiti için son kaydedilen/yüklenen durum
+        self._baseline_content: str = ""
+        self._baseline_rating: int = 0
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -202,19 +206,8 @@ class EditorPanel(QWidget):
         self._is_loading = True
         self._current_date = date_str
 
-        # Türkçe tarih başlığı
-        qdate = QDate.fromString(date_str, "yyyy-MM-dd")
-        if qdate.isValid():
-            turkish_months = [
-                "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
-                "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
-            ]
-            day_names = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
-            day_name = day_names[qdate.dayOfWeek() - 1]
-            month    = turkish_months[qdate.month() - 1]
-            self.date_label.setText(
-                f"{day_name}, {qdate.day()} {month} {qdate.year()}".upper()
-            )
+        # Türkçe tarih başlığı (ay/gün adları core.date_utils'te tek kaynakta)
+        self.date_label.setText(upper_tr(format_long(date_str)))
 
         entry = self.db.get_entry(date_str)
 
@@ -236,26 +229,32 @@ class EditorPanel(QWidget):
 
         self._is_loading = False
         self._update_word_count()
+        self._reset_baseline()
 
-    def save_entry(self) -> None:
-        """Editörü ve rating'i veritabanına kaydeder."""
+    def save_entry(self) -> bool:
+        """
+        Editörü ve rating'i veritabanına kaydeder.
+        Kayıt gerçekleştiyse True, engellendiyse (boş metin veya puansız) False döner.
+        Dönüş değeri, gün değiştirirken veriyi kaybetmemek için kullanılır.
+        """
         content = self.editor.toPlainText().strip()
         if not content:
-            return
+            return False
 
         happiness = self.rating_widget.get_rating()
         if happiness == 0:
             # Puan verilmeden kaydedilemesin
             self.rating_widget.flash_warning()
-            return
+            return False
 
+        # mood_score gönderilmez: yapay zekânın hesapladığı duygu puanı korunur
         self.db.save_entry(
             date=self._current_date,
             content=content,
-            mood_score=0,
             happiness_score=happiness
         )
 
+        self._reset_baseline()
         self.entry_saved.emit(self._current_date, content)
         self.suggestion_widget.hide_with_animation()
         self.delete_btn.setVisible(True)
@@ -268,18 +267,11 @@ class EditorPanel(QWidget):
             f"font-size: 13px; font-weight: 600;"
         )
         QTimer.singleShot(1500, self._reset_save_button)
+        return True
 
     def confirm_delete_entry(self) -> None:
         """Silme onayı ister ve onaylanırsa kaydı siler."""
-        qdate = QDate.fromString(self._current_date, "yyyy-MM-dd")
-        date_display = self._current_date
-        if qdate.isValid():
-            turkish_months = [
-                "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
-                "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
-            ]
-            month = turkish_months[qdate.month() - 1]
-            date_display = f"{qdate.day()} {month} {qdate.year()}"
+        date_display = format_short(self._current_date)
 
         msg = QMessageBox(self)
         msg.setWindowTitle("Kaydı Sil")
@@ -302,6 +294,7 @@ class EditorPanel(QWidget):
         self.rating_widget.set_rating(0)
         self.suggestion_widget.show_with_animation()
         self.delete_btn.setVisible(False)
+        self._reset_baseline()
         self.entry_deleted.emit(self._current_date)
 
     def _reset_save_button(self) -> None:
@@ -346,6 +339,27 @@ class EditorPanel(QWidget):
         words = len(text.split()) if text.strip() else 0
         chars = len(text)
         self.word_count_label.setText(f"{words} kelime · {chars} karakter")
+
+    def _reset_baseline(self) -> None:
+        """Mevcut içeriği "kaydedilmiş" kabul eder (kirli durum sıfırlanır)."""
+        self._baseline_content = self.editor.toPlainText().strip()
+        self._baseline_rating = self.rating_widget.get_rating()
+
+    def is_dirty(self) -> bool:
+        """
+        Editörde kaydedilmemiş bir değişiklik var mı?
+
+        Gün değiştirilirken yazılan metnin sessizce kaybolmasını önlemek için
+        MainWindow tarafından kullanılır.
+        """
+        if self._is_loading:
+            return False
+        content_changed = self.editor.toPlainText().strip() != self._baseline_content
+        rating_changed = self.rating_widget.get_rating() != self._baseline_rating
+        # Boş bir günde sadece puan verilmişse kaybolacak bir metin yoktur
+        if not self.editor.toPlainText().strip():
+            return False
+        return content_changed or rating_changed
 
     def get_current_date(self) -> str:
         return self._current_date
