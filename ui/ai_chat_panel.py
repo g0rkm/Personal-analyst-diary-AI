@@ -419,9 +419,12 @@ class AIChatPanel(QWidget):
         self._on_chat_finished()
 
     def _add_bubble(self, text: str, is_user: bool) -> ChatBubble:
+        # Son öge esneme boşluğudur; yeni balon eklemeden önce alınıp
+        # serbest bırakılır (yoksa her mesajda bir QSpacerItem birikir).
         count = self._chat_layout.count()
         if count > 0:
             stretch_item = self._chat_layout.takeAt(count - 1)
+            del stretch_item
 
         bubble = ChatBubble(text, is_user)
         self._chat_layout.addWidget(bubble)

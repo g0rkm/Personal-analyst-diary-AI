@@ -213,6 +213,9 @@ class RatingWidget(QWidget):
             self._reset_rating()
             return
         self._current_rating = max(0, min(10, score))
+        # Görsel stilin yanında butonun asıl seçili durumu da güncellenmeli;
+        # aksi halde QButtonGroup ile arayüz arasında tutarsızlık kalır.
+        self._buttons[self._current_rating - 1].setChecked(True)
         self._update_button_visuals()
         self._update_mood_indicator()
 
