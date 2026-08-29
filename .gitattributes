@@ -1,0 +1,9 @@
+# Varsayılan: satır sonlarını Git'e bırak
+* text=auto
+
+# Konteyner içinde çalışan kabuk betikleri her zaman LF olmalı,
+# aksi halde Linux'ta "bad interpreter: no such file or directory" hatası verir.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+docker-compose.yml text eol=lf
+*.conf          text eol=lf
