@@ -7,10 +7,9 @@ Model indirme, RAG sohbeti ve veritabanı indeksleme.
 
 import os
 import requests
-from datetime import datetime, timedelta
-import calendar
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.time_range import parse_time_range
 from database import Database
 from ai.chunker import chunk_entry
 from ai.report_engine import ReportEngine
@@ -77,55 +76,15 @@ class RAGChatWorker(QThread):
         self.last_date_range = last_date_range # (start_date, end_date)
         
     def _parse_time_range(self, query: str):
-        """Basit bir sorgu yönlendirici. 'geçen ay', 'bu ay' gibi anahtar kelimeleri algılar."""
-        q = query.lower()
-        today = datetime.now()
-        
-        # Basit ay isimleri haritası
-        aylar = {
-            "ocak": 1, "şubat": 2, "mart": 3, "nisan": 4, "mayıs": 5, "haziran": 6,
-            "temmuz": 7, "ağustos": 8, "eylül": 9, "ekim": 10, "kasım": 11, "aralık": 12
-        }
-        
-        if "geçen ay" in q:
-            first = today.replace(day=1)
-            last_month = first - timedelta(days=1)
-            start_date = last_month.replace(day=1).strftime("%Y-%m-%d")
-            end_date = last_month.strftime("%Y-%m-%d")
-            return (start_date, end_date), "Geçen ayki günlüklerin taranıyor..."
-            
-        elif "bu ay" in q:
-            start_date = today.replace(day=1).strftime("%Y-%m-%d")
-            end_date = today.strftime("%Y-%m-%d")
-            return (start_date, end_date), "Bu ayki günlüklerin taranıyor..."
-            
-        elif "geçen hafta" in q:
-            start_date = (today - timedelta(days=today.weekday() + 7)).strftime("%Y-%m-%d")
-            end_date = (today - timedelta(days=today.weekday() + 1)).strftime("%Y-%m-%d")
-            return (start_date, end_date), "Geçen haftaki günlüklerin taranıyor..."
-            
-        elif "bu hafta" in q:
-            start_date = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
-            end_date = today.strftime("%Y-%m-%d")
-            return (start_date, end_date), "Bu haftaki günlüklerin taranıyor..."
-            
-        # Ay isimlerini kontrol et
-        for ay_adi, ay_no in aylar.items():
-            if ay_adi in q:
-                # O ayın ilk günü ve son gününü bul
-                start_date = today.replace(month=ay_no, day=1).strftime("%Y-%m-%d")
-                son_gun = calendar.monthrange(today.year, ay_no)[1]
-                
-                # Eğer o ay şu anki aysa, sadece bugüne kadar olanı al
-                if ay_no == today.month:
-                    end_date = today.strftime("%Y-%m-%d")
-                else:
-                    end_date = today.replace(month=ay_no, day=son_gun).strftime("%Y-%m-%d")
-                    
-                return (start_date, end_date), f"{ay_adi.capitalize()} ayı günlüklerin taranıyor..."
-                
-        return None, None
-        
+        """
+        Sorgudaki zaman ifadesini tarih aralığına çevirir.
+
+        Asıl mantık core.time_range içindedir: Qt'den bağımsız olduğu için
+        arayüz başlatmadan test edilebilir ve kelime sınırlarına saygı duyar
+        ("çekimser" artık Ekim, "smart" artık Mart olarak algılanmaz).
+        """
+        return parse_time_range(query)
+
     def run(self):
         try:
             # 1. Yeni bir tarih aralığı soruluyor mu?
