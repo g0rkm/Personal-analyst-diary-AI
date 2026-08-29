@@ -32,6 +32,14 @@ diary.db-wal
 # Kişisel yol ayarları içerebilir
 settings.json
 
+# ── onnxruntime telemetri artığı (ORT_DISABLE_TELEMETRY ile engellenir) ──────
+*.ses
+
+# ── Test artıkları ───────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
 # ── IDE ve editör dosyaları ───────────────────────────────────────────────────
 .vscode/
 .idea/
@@ -68,3 +76,6 @@ models/
 
 # ── Vektör veritabanı ─────────────────────────────────────────────────
 lance_db/
+# ── Docker bind-mount veri klasörü ────────────────────────────────────────────
+data/*
+!data/.gitkeep
