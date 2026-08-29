@@ -9,18 +9,31 @@ import os
 import lancedb
 import pyarrow as pa
 
+from settings import get_vector_db_path
+
+# Embedding modelinin (paraphrase-multilingual-MiniLM-L12-v2) vektör boyutu.
+# Model değiştirilirse burası da güncellenmelidir; aksi halde LanceDB şeması
+# ile üretilen vektörler uyuşmaz ve ekleme sırasında hata alınır.
+VECTOR_DIM = 384
+
+
 class DiaryVectorStore:
-    def __init__(self, db_path="lance_db"):
+    def __init__(self, db_path: str = None):
+        # Yol verilmezse ayarlardan (veya DIARY_VECTOR_DB_PATH ortam değişkeninden) çözümlenir
+        if db_path is None:
+            db_path = get_vector_db_path()
+
         # Veritabanı klasörü yoksa LanceDB otomatik oluşturur
+        os.makedirs(db_path, exist_ok=True)
         self.db = lancedb.connect(db_path)
         self.table_name = "diary_chunks"
         
         # Tablo yoksa oluştur
-        if self.table_name not in self.db.table_names():
+        if self.table_name not in self._existing_table_names():
             # LanceDB için PyArrow şeması tanımlıyoruz
             schema = pa.schema([
                 pa.field("id", pa.string()),
-                pa.field("vector", pa.list_(pa.float32(), 384)), # multilingual-e5-small 384 boyutludur
+                pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
                 pa.field("text", pa.string()),
                 pa.field("date", pa.string()),
                 pa.field("chunk_index", pa.int32())
@@ -28,6 +41,22 @@ class DiaryVectorStore:
             self.table = self.db.create_table(self.table_name, schema=schema)
         else:
             self.table = self.db.open_table(self.table_name)
+
+    def _existing_table_names(self) -> list[str]:
+        """
+        Veritabanındaki tablo adlarını döner.
+
+        LanceDB sürümleri arasında API değişti: eski sürümler table_names()
+        ile düz bir liste dönerken (artık DeprecationWarning üretiyor), yeni
+        sürümler list_tables() ile .tables alanı olan bir yanıt nesnesi döner.
+        Bu uygulamada tek bir tablo bulunduğu için sayfalama gerekmez.
+        """
+        lister = getattr(self.db, "list_tables", None)
+        if lister is None:
+            return list(self.db.table_names())
+
+        response = lister()
+        return list(getattr(response, "tables", response))
 
     def add_chunks(self, chunks: list[dict], embeddings: list[list[float]]) -> None:
         """
@@ -62,6 +91,22 @@ class DiaryVectorStore:
                 self.table.delete(f"date = '{date}'")
             except Exception:
                 pass # Silinecek bir şey yoksa veya tablo boşsa hata vermesin
+
+    def get_indexed_dates(self) -> set[str]:
+        """
+        İndekslenmiş kayıtların tarihlerini döner.
+
+        main_window eskiden bunun için table.search().limit(10000) çağırıp
+        tüm satırları (384 boyutlu vektörleriyle birlikte) belleğe alıyordu;
+        hem israftı hem de 10.000 parçadan sonra sessizce kırpılıyordu.
+        Burada yalnızca "date" sütunu okunur, sınır yoktur.
+        """
+        if self.table.count_rows() == 0:
+            return set()
+
+        # Yalnızca "date" sütununu oku; 384 boyutlu vektörler belleğe alınmasın
+        rows = self.table.search().select(["date"]).limit(None).to_list()
+        return {row["date"] for row in rows}
 
     def search(self, query_vector: list[float], limit: int = 5) -> list[dict]:
         """Verilen sorgu vektörüne en yakın (semantik olarak benzer) parçaları bulur."""
