@@ -11,6 +11,7 @@ Sütunlar:
   happiness_score INTEGER   — Kullanıcının elle verdiği günlük mutluluk puanı (0..10)
 """
 
+import os
 import sqlite3
 from typing import Optional
 from settings import get_db_path
@@ -24,12 +25,20 @@ class Database:
 
     def __init__(self):
         self.db_path = get_db_path()
+
+        # Hedef klasör yoksa oluştur (Docker volume'u ilk açılışta boş olabilir)
+        parent_dir = os.path.dirname(self.db_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+
         self._initialize_db()
 
     def _get_connection(self) -> sqlite3.Connection:
         """Her işlem için yeni bir bağlantı döner (thread-safe)."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        # WAL: MoodAnalysisWorker arka planda yazarken UI'nin okuması bloklanmasın
+        conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
     def _initialize_db(self) -> None:
@@ -96,6 +105,25 @@ class Database:
             cursor = conn.execute(sql)
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_entries_without_mood(self) -> list[dict]:
+        """
+        Henüz AI duygu puanı hesaplanmamış kayıtları döner.
+
+        MoodAnalysisWorker eskiden get_all_entries_content() ile TÜM kayıtları
+        alıyordu; AI paneli her açıldığında bütün günlükler yeniden LLM'e
+        gönderiliyordu. Bu sorgu işi yalnızca eksik kayıtlarla sınırlar.
+        """
+        sql = """
+        SELECT date, content
+        FROM entries
+        WHERE content != '' AND content IS NOT NULL
+          AND (mood_score IS NULL OR mood_score = 0)
+        ORDER BY date DESC
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(sql)
+            return [dict(row) for row in cursor.fetchall()]
+
     def get_entries_by_date_range(self, start_date: str, end_date: str) -> list[dict]:
         """
         Belirtilen tarih aralığındaki tüm kayıtları kronolojik sırayla döner.
@@ -114,23 +142,42 @@ class Database:
     # ── Yazma ──────────────────────────────────────────────────────────────
 
     def save_entry(self, date: str, content: str,
-                   mood_score: int = 0,
+                   mood_score: Optional[int] = None,
                    happiness_score: int = 0) -> None:
         """
         Kaydı ekler veya günceller (UPSERT).
+
         happiness_score: Kullanıcının 1-10 arası verdiği puan.
-        mood_score: AI tarafından doldurulacak (-10..+10), şimdilik 0.
+        mood_score:
+            None (varsayılan) -> mevcut kayıttaki AI duygu puanı KORUNUR.
+            Bir sayı verilirse o değer yazılır.
+
+        Not: Eskiden mood_score varsayılan olarak 0 yazılıyordu; bu yüzden
+        kullanıcı bir yazıyı düzenleyip yeniden kaydettiğinde yapay zekânın
+        hesapladığı duygu puanı siliniyordu (istatistikler bozuluyordu).
         """
-        sql = """
-        INSERT INTO entries (date, content, mood_score, happiness_score)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(date) DO UPDATE SET
-            content         = excluded.content,
-            mood_score      = excluded.mood_score,
-            happiness_score = excluded.happiness_score
-        """
+        if mood_score is None:
+            sql = """
+            INSERT INTO entries (date, content, mood_score, happiness_score)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                content         = excluded.content,
+                happiness_score = excluded.happiness_score
+            """
+            params = (date, content, happiness_score)
+        else:
+            sql = """
+            INSERT INTO entries (date, content, mood_score, happiness_score)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                content         = excluded.content,
+                mood_score      = excluded.mood_score,
+                happiness_score = excluded.happiness_score
+            """
+            params = (date, content, mood_score, happiness_score)
+
         with self._get_connection() as conn:
-            conn.execute(sql, (date, content, mood_score, happiness_score))
+            conn.execute(sql, params)
             conn.commit()
 
     def update_mood_score(self, date: str, mood_score: int) -> None:
@@ -149,15 +196,28 @@ class Database:
 
     # ── Arama ──────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _escape_like(keyword: str) -> str:
+        """
+        LIKE için özel anlamı olan karakterleri kaçışlar.
+        Kaçışlanmazsa "%" araması TÜM kayıtları, "_" araması herhangi bir
+        tek karakteri eşleştirir; kullanıcı düz metin aradığını sanır.
+        """
+        return (
+            keyword.replace("\\", "\\\\")
+                   .replace("%", "\%")
+                   .replace("_", "\_")
+        )
+
     def search_entries(self, keyword: str) -> list[dict]:
         """İçerikte geçen kelimeyi LIKE ile arar, sonuçları listeler."""
-        sql = """
+        sql = r"""
         SELECT date, content, mood_score, happiness_score
         FROM entries
-        WHERE content LIKE ?
+        WHERE content LIKE ? ESCAPE '\'
         ORDER BY date DESC
         """
-        pattern = f"%{keyword}%"
+        pattern = f"%{self._escape_like(keyword)}%"
         with self._get_connection() as conn:
             cursor = conn.execute(sql, (pattern,))
             return [dict(row) for row in cursor.fetchall()]
