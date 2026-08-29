@@ -1,0 +1,48 @@
+###############################################################################
+# Geliştirme / test katmanı.
+#
+# Kaynak kodu konteynerin içine canlı olarak bağlar; böylece her değişiklikten
+# sonra imajı yeniden derlemek gerekmez.
+#
+#   Uygulamayı canlı kodla çalıştır:
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+#   Testleri çalıştır:
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+#       run --rm --entrypoint pytest diary
+###############################################################################
+
+services:
+  diary:
+    volumes:
+      # Kaynak kodu host'tan bağla (imajdaki kopyanın üzerine biner)
+      - .:/app
+      # Kalıcı veri ve önbellekler ana compose dosyasındaki gibi kalsın
+      - ./data:/app/data
+      - diary-models:/app/models
+      - diary-cache:/app/cache
+    environment:
+      # Testler ve geliştirme çalıştırmaları gerçek günlüğe dokunmasın diye
+      # ayrı bir veritabanı kullanılabilir; testler zaten tmp_path kullanır.
+      PYTHONDONTWRITEBYTECODE: "1"
+
+  # ── Test koşucusu ──────────────────────────────────────────────────────────
+  # docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm tests
+  # Ek argümanlar pytest'e geçer:
+  #   ... run --rm tests -k time_range -v
+  tests:
+    # "up" ile birlikte başlamasın; yalnızca "run tests" ile çalışsın
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: tests
+    image: personal-analyst-diary:tests
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      QT_QPA_PLATFORM: "offscreen"
+      # Testler gerçek günlüğe dokunmasın: her test kendi tmp_path'ini kullanır
+      DIARY_DB_PATH: ""
+      DIARY_VECTOR_DB_PATH: ""

@@ -1,0 +1,5 @@
+# Geliştirme ve test bağımlılıkları.
+#   pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+pytest>=8.0.0
+pytest-qt>=4.4.0
