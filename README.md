@@ -17,12 +17,50 @@ Yazdığınız her cümle güvendedir ve asla internete gönderilmez. Gelişmiş
 ### 🧠 Tamamen Yerel ve Gizli Yapay Zeka
 Tüm yapay zeka işlemleri (LLM çıkarımları ve vektör aramaları) tamamen kendi bilgisayarınızda (çevrimdışı) çalışır. Verileriniz asla dışarı çıkmaz. Uygulama, Qwen2.5-3B modelini indirerek minimum RAM (8GB) ve CPU gereksinimiyle bile akıcı bir sohbet deneyimi sunar. Embedding motorunun altındaki onnxruntime telemetrisi de kapatılmıştır (`ORT_DISABLE_TELEMETRY`).
 
-### 🔍 Akıllı Yönlendirici (Smart Query Router)
-Sadece anahtar kelime araması değil, bağlam ve zaman farkındalığına sahip hibrit bir sohbet altyapısı:
-- **Spesifik Anı Arama (RAG):** *"Geçen ay spora ne zaman başlamıştım?"* gibi sorularda LanceDB (Vektör Veritabanı) devreye girerek semantik eşleşme bulur.
-- **Zaman Bazlı Raporlama (SQL):** *"Geçen ay ruh halim nasıldı?"* veya *"Bu hafta en çok neyi erteledim?"* dediğinizde, sistem zaman dilimini algılar ve arama motorunu devre dışı bırakarak o ayın tamamını okuyup size özel bir analiz raporu çıkarır.
-- **Sohbet Hafızası:** Ardışık sorularda (Örn: *"Peki neden böyle hissetmişim?"*) bağlamı ve zamanı hatırlar.
-- **Anlaşılan zaman ifadeleri:** *bugün, dün, bu hafta, geçen hafta, bu ay, geçen ay, bu yıl, geçen yıl* ve ay adları (*"Mart'ta"*, *"Ekimde"*, *"Ocak ayında"*). Ay adı başka bir kelimenin içinde geçtiğinde (*"çekimser"*, *"smart"*, *"kasımpatı"*) yanlış eşleşme yapmaz; içinde bulunulan aydan sonraki bir ay sorulursa bir önceki yılın aynı ayı alınır.
+### 🔍 Analiz Motoru (Smart Query Router)
+Sadece anahtar kelime araması değil; **sayan, sıralayan ve ilişki kuran** bir analiz katmanı. Soru üç rotadan birine yönlendirilir:
+
+| Rota | Ne zaman | Örnek |
+|---|---|---|
+| **ANALİZ** | Toplu sayım / sıralama / ilişki isteniyorsa | *"Bu hafta en çok neyi erteledim?"* |
+| **ÖZET** | Bir dönemin anlatılması isteniyorsa | *"Bu ayı özetle"* |
+| **RAG** | Belirli bir anı aranıyorsa | *"Spora ne zaman başlamıştım?"* |
+
+**Analiz rotası nasıl çalışır — mimarinin özü:**
+
+```
+YAZMA ZAMANI                          SORU ZAMANI
+─────────────                         ───────────
+günlük kaydı                          soru
+    ↓  (kayıt başına bir kez,             ↓
+        şema zorlamalı JSON)          ├─ zaman aralığı  (core/time_range.py)
+yapısal veri                          └─ niyet          (core/query_intent.py)
+  • duygu puanı, tek cümlelik özet         ↓
+  • yapılanlar / ertelenenler          SQL ile SAYIM   (core/analytics.py)
+  • iyi gelenler / zorlayanlar             ↓
+  • duygular, kişiler, mekânlar        OLGU KAĞIDI (~500 token)
+    ↓                                      ↓
+entry_insights + entry_facets          model yalnızca akıcı Türkçeye çevirir
+```
+
+**Model hiçbir aşamada sayı üretmez, sayıları okur.** Bunun iki sonucu var:
+
+- **Uydurma sayı riski yok.** "Spor 9 gün ertelenmiş" bilgisi SQL'den gelir; model onu cümleye döker.
+- **Prompt boyutu dönem uzunluğundan bağımsız.** Bir yıllık analiz de bir haftalık kadar yer kaplar. Eskiden bir aylık dönem bile bağlam penceresini aşıyor ve soru hata veriyordu.
+
+**Anlaşılan sorular:**
+- *"Bu ay genel ruh halim nasıldı"* → ortalama, en iyi/en kötü gün, haftalık seyir, önceki ayla karşılaştırma
+- *"Bu hafta en çok neyi erteledim"* → gün sayısıyla sıralama
+- *"En sürekli yaptığım şey neydi"* → kapsama yüzdesi ve en uzun kesintisiz seri
+- *"Stresli olduğumda bana ne iyi geliyor"* → zor günler bulunur, o günlerde iyi gelenler sayılır (zaman ifadesi gerekmez)
+- Tek soruda birden fazla analiz: *"Mart'ta en çok ertelediğim **ve** en sürekli yaptığım şey"*
+
+**Sohbet hafızası:** Ardışık sorularda (*"Peki neden böyle hissetmişim?"*) dönem hatırlanır.
+
+**Anlaşılan zaman ifadeleri:** *bugün, dün, bu/geçen hafta, bu/geçen ay, bu/geçen yıl* ve ay adları — Türkçe ekleriyle birlikte (*"bu ayı"*, *"Mart'ta"*, *"geçen haftayı"*). Ay adı başka bir kelimenin içinde geçtiğinde (*"çekimser"*, *"smart"*, *"kasımpatı"*) yanlış eşleşme yapmaz.
+
+### 🏷️ Etiket Birleştirme
+*"yürüyüş"*, *"yürüyüşe çıkmak"* ve *"yürüdüm"* aynı şey sayılır. Zaten kurulu olan embedding modeli benzer etiketleri tek bir kanonik etikette toplar; böylece "en çok yaptığım şey" sıralaması üçe bölünüp yanıltıcı olmaz. Ham yazım her zaman saklanır, karar geri alınabilir.
 
 ### 📊 Isı Haritası (Heatmap) ve Duygu Analizi
 GitHub tarzı ısı haritası takvimi ile hangi günlerde ne kadar yoğun yazdığınızı görebilirsiniz. Arka planda çalışan AI asistan, yazdığınız her günlüğe bir **Duygu Puanı (Mood Score)** atar. Puan bir kez hesaplandıktan sonra yazınızı düzenleseniz de korunur ve yalnızca puanı olmayan günlükler yeniden analiz edilir.
@@ -190,17 +228,25 @@ Arayüz testleri Qt'nin `offscreen` platformuyla çalışır, ekran gerektirmez.
 | `test_editor_panel.py` | Editör, kaydetme, kaydedilmemiş değişiklik takibi |
 | `test_rating_widget.py` | Mutluluk puanlama widget'ı |
 | `test_search_dialog.py` | Arama sonuçları diyaloğu ve Türkçe tarih gösterimi |
+| `test_token_budget.py` | Prompt token bütçesi ve bağlam taşması koruması |
+| `test_labels.py` | Etiket normalleştirme (Türkçe büyük/küçük harf) |
+| `test_insight_extractor.py` | Yapısal çıkarım, bozuk model çıktısına dayanıklılık |
+| `test_label_merger.py` | Benzer etiketlerin birleştirilmesi |
+| `test_analytics.py` | Duygu eğilimi, sıklık, süreklilik, korelasyon |
+| `test_query_intent.py` | Niyet yönlendirici (dört örnek soru dahil) |
+| `test_analysis_engine.py` | Olgu kağıdı içeriği ve boyut bağımsızlığı |
 | `test_main_window.py` | Gün değiştirirken veri kaybı koruması (entegrasyon) |
 
 ---
 
 ## 🛠️ Mimari Altyapı
 
-- **Çekirdek (`core/`):** Qt ve model bağımlılığı olmayan saf Python yardımcıları (Türkçe tarih biçimlendirme, zaman ifadesi çözümleyici). Arayüz başlatmadan test edilebilir.
+- **Çekirdek (`core/`):** Qt ve model bağımlılığı olmayan saf Python katmanı — Türkçe tarih biçimlendirme (`date_utils`), zaman ifadesi çözümleyici (`time_range`), niyet yönlendirici (`query_intent`), analiz hesapları (`analytics`), etiket normalleştirme (`labels`) ve prompt token bütçesi (`token_budget`). Arayüz başlatmadan test edilebilir.
+- **Analiz katmanı (`ai/`):** Kayıtlardan yapısal veri çıkarımı (`insight_extractor`, şema zorlamalı JSON), etiket birleştirme (`label_merger`) ve olgu kağıdı + anlatım (`analysis_engine`).
 - **UI Framework:** PyQt6 (Özelleştirilmiş stiller ve asenkron Thread Worker'lar).
 - **Yerel LLM:** `llama-cpp-python` (Qwen2.5-3B-Instruct Q4_K_M GGUF).
 - **Vektör Veritabanı:** `LanceDB` (Semantik arama ve RAG için).
-- **İlişkisel Veritabanı:** `SQLite` (Hızlı tarih sorguları ve veri saklama).
+- **İlişkisel Veritabanı:** `SQLite` — günlükler (`entries`), yapısal çıkarımlar (`entry_insights`), sayılabilir etiketler (`entry_facets`) ve etiket eş anlamlıları (`label_aliases`). Tüm analiz sayımları burada yapılır.
 - **Embedding Modeli:** `paraphrase-multilingual-MiniLM-L12-v2` (Cümleleri anlam vektörlerine çevirmek için).
 - **Asenkron İşlemler:** Model indirme, vektör indeksleme, duygu analizi ve AI chat cevapları QThread üzerinden arayüzü dondurmadan çalıştırılır.
 - **Konteyner:** Çok aşamalı (multi-stage) Docker imajı — Xvfb sanal ekranı + x11vnc + noVNC ile arayüz tarayıcıya taşınır; uygulama konteyner içinde root olmayan `app` kullanıcısıyla çalışır.
