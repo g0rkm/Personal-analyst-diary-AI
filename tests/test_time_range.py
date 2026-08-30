@@ -132,3 +132,35 @@ class TestMesajlar:
     def test_yukleniyor_mesaji_bilgilendirici(self, sorgu, parca):
         _, mesaj = parse_time_range(sorgu, BUGUN)
         assert mesaj is not None and parca in mesaj
+
+
+class TestTurkceEkler:
+    """
+    Regresyon: göreli ifadelerde Türkçe ek desteği yoktu; "bu ayı özetle"
+    sorusunda dönem algılanmıyor ve soru dönemsiz sayılıyordu.
+    """
+
+    @pytest.mark.parametrize("sorgu,beklenen", [
+        ("bu ayı özetle", ("2026-08-01", "2026-08-29")),
+        ("bu ayın nasıl geçti", ("2026-08-01", "2026-08-29")),
+        ("bu ayda neler oldu", ("2026-08-01", "2026-08-29")),
+        ("geçen ayı anlat", ("2026-07-01", "2026-07-31")),
+        ("geçen ayın", ("2026-07-01", "2026-07-31")),
+        ("geçen haftayı özetle", ("2026-08-17", "2026-08-23")),
+        ("bu haftada ne yaptım", ("2026-08-24", "2026-08-29")),
+        ("dünkü günlüğüm", ("2026-08-28", "2026-08-28")),
+        ("düne kadar", ("2026-08-28", "2026-08-28")),
+        ("bugünkü kayıt", ("2026-08-29", "2026-08-29")),
+    ])
+    def test_ekli_kullanimlar_yakalanir(self, sorgu, beklenen):
+        assert aralik(sorgu) == beklenen
+
+    @pytest.mark.parametrize("sorgu", [
+        "bu ayakkabı çok güzel",
+        "bu ayna kırıldı",
+        "bu aynı şey değil",
+        "bu ayrıntıyı unutmuşum",
+        "bu ayarı değiştirdim",
+    ])
+    def test_benzeyen_kelimeler_yanlis_eslesmez(self, sorgu):
+        assert aralik(sorgu) is None

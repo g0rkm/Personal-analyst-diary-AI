@@ -40,9 +40,26 @@ _MONTH_SUFFIX = (
 )
 
 
+# Göreli zaman ifadelerinden sonra gelebilecek Türkçe çekim ekleri.
+# "bu ayı özetle", "geçen haftayı", "dünkü günlüğüm" gibi kullanımlar
+# yakalanmalı; "bu ayakkabı", "bu ayna" gibi kelimeler yakalanmamalı.
+_RELATIVE_SUFFIX = (
+    r"(?:'?(?:nd[ae]n|nd[ae]|n[ıi]n|y[ıiuü]|[ıiuü]n|d[ae]n|d[ae]|"
+    r"t[ae]n|t[ae]|k[ıiuü]|[ıiuü]|[ae])?)"
+)
+
+
 def _word_pattern(word: str) -> re.Pattern:
-    """Kelimeyi harf sınırlarıyla (ön ek/son ek yapışmasına karşı) arar."""
-    return re.compile(rf"(?<!\w){re.escape(word)}(?!\w)", re.IGNORECASE | re.UNICODE)
+    """
+    İfadeyi harf sınırlarıyla ve Türkçe çekim ekleriyle birlikte arar.
+
+    Ek desteği olmadan "bu ayı özetle" sorusunda "bu ay" ifadesi
+    yakalanamıyor ve soru dönemsiz kabul ediliyordu.
+    """
+    return re.compile(
+        rf"(?<!\w){re.escape(word)}{_RELATIVE_SUFFIX}(?!\w)",
+        re.IGNORECASE | re.UNICODE,
+    )
 
 
 def _month_pattern(name: str) -> re.Pattern:
