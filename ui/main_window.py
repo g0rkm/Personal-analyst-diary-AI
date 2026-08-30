@@ -26,7 +26,9 @@ from core.date_utils import format_short
 from settings import load_settings
 from ui.full_calendar_view import FullCalendarView
 from ai.rag_engine import RAGEngine
-from ai.worker import IndexWorker, MoodAnalysisWorker
+from ai.insight_extractor import InsightExtractor
+from ai.label_merger import LabelMerger
+from ai.worker import IndexWorker, InsightWorker
 import os
 from ui.styles import (
     MAIN_STYLESHEET,
@@ -112,6 +114,8 @@ class MainWindow(QMainWindow):
         self._sidebar_expanded = True
         self._current_tab = 0
         self.rag_engine = None
+        self.insight_extractor = None
+        self.label_merger = None
         # Çalışan QThread'ler burada tutulur. Tek bir alana atanırlarsa
         # (self.index_worker = ...) bir sonraki atama önceki thread'in son
         # referansını düşürür ve Qt "QThread: Destroyed while thread is still
@@ -298,8 +302,12 @@ class MainWindow(QMainWindow):
         model_path = settings.get("model_path", "models/qwen2.5-3b-instruct-q4_k_m.gguf")
         if self.ai_panel._is_expanded and not self.rag_engine and os.path.exists(model_path):
             self.rag_engine = RAGEngine()
+            self.insight_extractor = InsightExtractor(self.rag_engine.llm)
+            self.label_merger = LabelMerger(self.rag_engine.embedder, self.db)
             self.ai_panel.set_rag_engine(self.rag_engine)
-            
+            self.ai_panel.set_analysis_context(self.insight_extractor,
+                                               self.label_merger)
+
             # SQLite ile LanceDB arasında senkronizasyon (eksik kayıtları indeksle)
             entries = self.db.get_all_entries_content()
             indexed_dates = self.rag_engine.vector_store.get_indexed_dates()
@@ -312,16 +320,27 @@ class MainWindow(QMainWindow):
                     missing_entries
                 ))
 
-            # Yalnızca duygu puanı HENÜZ hesaplanmamış günlükleri analiz et.
-            # Eskiden tüm kayıtlar gönderiliyordu; panel her açıldığında bütün
-            # günlükler baştan LLM'e veriliyor ve gereksiz yere uzun sürüyordu.
-            pending_mood = self.db.get_entries_without_mood()
-            if pending_mood:
-                self._start_worker(MoodAnalysisWorker(
-                    self.rag_engine.llm,
-                    self.db,
-                    pending_mood
-                ))
+            # Analizi eksik ya da bayatlamış günlükleri arka planda çıkar.
+            # Yalnızca eksikler işlenir: panel her açıldığında bütün geçmiş
+            # baştan LLM'e verilmez. Kullanıcı bir yazıyı düzenlerse o kaydın
+            # içerik parmak izi değişir ve yeniden analiz edilir.
+            pending = self.db.get_entries_needing_insight()
+            if pending:
+                self._start_insight_worker(pending)
+
+    def _start_insight_worker(self, entries: list[dict]) -> None:
+        """
+        Verilen kayıtlar için yapısal çıkarımı arka planda başlatır ve
+        ilerlemeyi AI paneline bildirir.
+        """
+        if not entries or not self.insight_extractor:
+            return
+
+        worker = InsightWorker(self.insight_extractor, self.db, entries,
+                               merger=self.label_merger)
+        worker.progress.connect(self.ai_panel.show_insight_progress)
+        worker.finished.connect(self.ai_panel.hide_insight_progress)
+        self._start_worker(worker)
 
     def _start_worker(self, worker) -> None:
         """
@@ -567,20 +586,20 @@ class MainWindow(QMainWindow):
         if os.path.exists(model_path):
             if not self.rag_engine:
                 self.rag_engine = RAGEngine()
+                self.insight_extractor = InsightExtractor(self.rag_engine.llm)
+                self.label_merger = LabelMerger(self.rag_engine.embedder, self.db)
                 self.ai_panel.set_rag_engine(self.rag_engine)
-                
+            self.ai_panel.set_analysis_context(self.insight_extractor,
+                                               self.label_merger)
+
             self._start_worker(IndexWorker(
                 self.rag_engine.embedder,
                 self.rag_engine.vector_store,
                 [{"date": date_str, "content": content}]
             ))
 
-            # Arka planda mood_score hesabı
-            self._start_worker(MoodAnalysisWorker(
-                self.rag_engine.llm,
-                self.db,
-                [{"date": date_str, "content": content}]
-            ))
+            # Arka planda yapısal çıkarım (duygu puanı + özet + etiketler)
+            self._start_insight_worker([{"date": date_str, "content": content}])
 
     def _do_search(self) -> None:
         """Veritabanında arama yapar ve sonuç diyaloğu açar."""

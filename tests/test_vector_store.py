@@ -149,3 +149,40 @@ class TestArama:
 
     def test_vektor_boyutu_sabiti_gomucuyle_uyumlu(self, fake_embedder):
         assert len(fake_embedder.embed_query("test")) == VECTOR_DIM
+
+
+class TestTarihFiltresi:
+    """
+    Analiz cevaplarına örnek gösterirken alıntı, sorulan dönemin içinden
+    gelmelidir: "Mart ayında..." sorusuna Nisan'dan alıntı yanıltıcıdır.
+    """
+
+    @pytest.fixture
+    def dolu_depo(self, temp_vector_store, fake_embedder):
+        for ay in (3, 4, 5):
+            parcala_ve_ekle(temp_vector_store, fake_embedder,
+                            f"2026-{ay:02d}-15", "spor salonuna gittim")
+        return temp_vector_store
+
+    def test_aralik_disindakiler_gelmez(self, dolu_depo, fake_embedder):
+        sonuc = dolu_depo.search(fake_embedder.embed_query("spor"), limit=10,
+                                 date_from="2026-03-01", date_to="2026-03-31")
+        assert [r["date"] for r in sonuc] == ["2026-03-15"]
+
+    def test_genis_aralik_hepsini_getirir(self, dolu_depo, fake_embedder):
+        sonuc = dolu_depo.search(fake_embedder.embed_query("spor"), limit=10,
+                                 date_from="2026-01-01", date_to="2026-12-31")
+        assert len(sonuc) == 3
+
+    def test_filtresiz_arama_eskisi_gibi_calisir(self, dolu_depo, fake_embedder):
+        assert len(dolu_depo.search(fake_embedder.embed_query("spor"), limit=10)) == 3
+
+    def test_bos_aralik_bos_sonuc(self, dolu_depo, fake_embedder):
+        sonuc = dolu_depo.search(fake_embedder.embed_query("spor"), limit=10,
+                                 date_from="2027-01-01", date_to="2027-12-31")
+        assert sonuc == []
+
+    def test_limit_aralik_icinde_uygulanir(self, dolu_depo, fake_embedder):
+        sonuc = dolu_depo.search(fake_embedder.embed_query("spor"), limit=2,
+                                 date_from="2026-01-01", date_to="2026-12-31")
+        assert len(sonuc) == 2

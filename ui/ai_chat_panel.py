@@ -90,6 +90,8 @@ class AIChatPanel(QWidget):
         super().__init__(parent)
         self._is_expanded = False
         self.rag_engine = None
+        self.insight_extractor = None
+        self.label_merger = None
         self.chat_worker = None
         self.download_worker = None
         self._current_ai_bubble = None
@@ -109,6 +111,14 @@ class AIChatPanel(QWidget):
 
     def set_rag_engine(self, rag_engine: RAGEngine):
         self.rag_engine = rag_engine
+
+    def set_analysis_context(self, insight_extractor=None, label_merger=None):
+        """
+        Analiz rotasının eksik çıkarımları yerinde tamamlayabilmesi için
+        gereken bileşenleri alır (MainWindow tarafından verilir).
+        """
+        self.insight_extractor = insight_extractor
+        self.label_merger = label_merger
 
     def _setup_ui(self) -> None:
         self.setStyleSheet(f"""
@@ -241,6 +251,24 @@ class AIChatPanel(QWidget):
             sugg_layout.addWidget(btn)
         content_layout.addWidget(self._suggestions_widget)
 
+        # Geçmiş analizi ilerleme göstergesi.
+        # Analiz eksikken verilen cevap yanıltıcı olabileceği için,
+        # arka planda çalışan çıkarım kullanıcıya görünür kılınır.
+        self._insight_progress_label = QLabel("")
+        self._insight_progress_label.setVisible(False)
+        self._insight_progress_label.setWordWrap(True)
+        self._insight_progress_label.setStyleSheet(f"""
+            QLabel {{
+                color: {TEXT_MUTED};
+                background: rgba(255,255,255,0.04);
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 8px;
+                padding: 5px 8px;
+                font-size: 10px;
+            }}
+        """)
+        content_layout.addWidget(self._insight_progress_label)
+
         # Giriş Alanı
         self.input_layout_widget = QWidget()
         input_layout = QHBoxLayout(self.input_layout_widget)
@@ -336,6 +364,18 @@ class AIChatPanel(QWidget):
             self._content_widget.setVisible(False)
         self._update_toggle_style(self._is_expanded)
 
+    def show_insight_progress(self, done: int, total: int) -> None:
+        """Arka plandaki geçmiş analizinin ilerlemesini gösterir."""
+        if total <= 1:
+            # Tek kayıtlık analiz (kullanıcı az önce kaydetti) — gürültü yapma
+            return
+        self._insight_progress_label.setText(f"Geçmiş analiz ediliyor: {done}/{total}")
+        self._insight_progress_label.setVisible(True)
+
+    def hide_insight_progress(self) -> None:
+        """Analiz bitince göstergeyi gizler."""
+        self._insight_progress_label.setVisible(False)
+
     def _set_input_text(self, text: str) -> None:
         self._chat_input.setText(text)
         self._chat_input.setFocus()
@@ -369,7 +409,11 @@ class AIChatPanel(QWidget):
         self._thinking_timer.start(400)
 
         # Arka planda çalıştır — sohbet geçmişini ve aktif zaman aralığını da gönder
-        self.chat_worker = RAGChatWorker(self.rag_engine, text, self._chat_history.copy(), self.last_date_range)
+        self.chat_worker = RAGChatWorker(
+            self.rag_engine, text, self._chat_history.copy(), self.last_date_range,
+            insight_extractor=self.insight_extractor,
+            label_merger=self.label_merger,
+        )
         self.chat_worker.token_received.connect(self._on_token_received)
         self.chat_worker.mode_detected.connect(self._on_mode_detected)
         self.chat_worker.finished.connect(self._on_chat_finished)

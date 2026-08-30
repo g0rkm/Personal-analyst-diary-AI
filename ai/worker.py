@@ -9,8 +9,10 @@ import os
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.query_intent import SUMMARY, parse_intents
 from core.time_range import parse_time_range
 from database import Database
+from ai.analysis_engine import AnalysisEngine
 from ai.chunker import chunk_entry
 from ai.report_engine import ReportEngine
 
@@ -68,12 +70,23 @@ class RAGChatWorker(QThread):
     finished = pyqtSignal(object) # Yeni last_date_range dönmek için
     error = pyqtSignal(str)
     
-    def __init__(self, rag_engine, user_query: str, chat_history: list = None, last_date_range: tuple = None):
+    # Cevap vermeden önce yerinde analiz edilecek azami kayıt sayısı.
+    # Kullanıcı "hibrit" doldurmayı seçti: sorulan dönem öncelikli işlenir,
+    # ama cevabın dakikalarca gecikmemesi için bir üst sınır gerekir.
+    MAX_INLINE_INSIGHTS = 12
+
+    def __init__(self, rag_engine, user_query: str, chat_history: list = None,
+                 last_date_range: tuple = None, insight_extractor=None,
+                 label_merger=None, db=None):
         super().__init__()
         self.rag_engine = rag_engine
         self.user_query = user_query
         self.chat_history = chat_history or []
         self.last_date_range = last_date_range # (start_date, end_date)
+        # Analiz rotasında eksik çıkarımları yerinde tamamlamak için
+        self.insight_extractor = insight_extractor
+        self.label_merger = label_merger
+        self._db = db
         
     def _parse_time_range(self, query: str):
         """
@@ -85,44 +98,116 @@ class RAGChatWorker(QThread):
         """
         return parse_time_range(query)
 
+    def _fill_missing_insights(self, db, start_date, end_date) -> None:
+        """
+        Sorulan dönemdeki eksik çıkarımları cevap verilmeden önce tamamlar.
+
+        Tümü değil, MAX_INLINE_INSIGHTS kadarı işlenir: 300 kayıtlık bir
+        geçmişi beklemek kullanıcıyı dakikalarca oyalar. Kalanı arka planda
+        tamamlanır ve olgu kağıdındaki "VERİ KAPSAMI" satırı eksikliği
+        dürüstçe bildirir.
+        """
+        if self.insight_extractor is None:
+            return
+
+        bekleyen = db.get_entries_needing_insight(start_date, end_date)
+        if not bekleyen:
+            return
+
+        bekleyen = bekleyen[: self.MAX_INLINE_INSIGHTS]
+        toplam = len(bekleyen)
+
+        for sira, entry in enumerate(bekleyen, start=1):
+            self.mode_detected.emit(
+                "ANALYSIS", f"Eksik günlükler analiz ediliyor: {sira}/{toplam}"
+            )
+            try:
+                insight = self.insight_extractor.extract(entry["content"])
+                facets = insight.facets
+                if self.label_merger is not None:
+                    facets = self.label_merger.merge_facets(facets)
+
+                db.save_insight(
+                    date=entry["date"],
+                    content=entry["content"],
+                    summary=insight.summary,
+                    energy=insight.energy,
+                    sleep_quality=insight.sleep_quality,
+                    facets=facets,
+                )
+                db.update_mood_score(entry["date"], insight.mood)
+            except Exception as e:
+                print(f"Çıkarım atlandı ({entry['date']}):", e)
+
     def run(self):
+        """
+        Soruyu üç rotadan birine yönlendirir:
+
+          ANALİZ — "en çok neyi erteledim", "ruh halim nasıldı" gibi toplu
+                   sorular. Sayılar SQL ile hesaplanır, model yalnızca
+                   anlatır (ai/analysis_engine.py).
+          ÖZET   — "bu ayı özetle": dönemin günlükleri okunur.
+          RAG    — "spora ne zaman başlamıştım": belirli bir anı aranır.
+        """
         try:
-            # 1. Yeni bir tarih aralığı soruluyor mu?
+            # 1. Sorudaki zaman aralığı
             date_range, loading_msg = self._parse_time_range(self.user_query)
-            
-            # 2. Eğer yeni bir tarih sorulmuyorsa ama önceki soru takvimle ilgiliyse bağlamı koru
+
+            # 2. Zaman ifadesi yoksa önceki sorunun dönemini sürdür
+            #    ("Peki neden böyle hissetmişim?" gibi takip soruları)
             if not date_range and self.last_date_range:
-                # "Neden kötüymüşüm?" gibi takip eden sorular için
                 date_range = self.last_date_range
                 loading_msg = "Günlüklerin taranıyor..."
-                
-            if date_range:
-                # ROUTE 1: SQL Tabanlı Zaman Analizi (Report Engine Mantığı)
-                self.mode_detected.emit("SQL", loading_msg)
-                
-                db = Database()
-                report_engine = ReportEngine(self.rag_engine.llm)
-                
-                # Tüm dönemi okuyup spesifik soruya (user_query) cevap verecek
-                stream = report_engine.generate_report_stream(
-                    start_date=date_range[0],
-                    end_date=date_range[1],
-                    db=db,
-                    user_question=self.user_query
+
+            start_date, end_date = date_range if date_range else (None, None)
+
+            # 3. Soru hangi analizi istiyor?
+            intents = parse_intents(self.user_query)
+            analiz_istekleri = [i for i in intents if i.kind != SUMMARY]
+
+            if analiz_istekleri:
+                # ROTA 1: Analiz — sayılar SQL'den, anlatı modelden
+                self.mode_detected.emit(
+                    "ANALYSIS", loading_msg or "Günlüklerin analiz ediliyor..."
                 )
-                
+                db = self._db or Database()
+
+                # Sorulan dönemde analizi eksik kayıt varsa önce onları
+                # tamamla; analiz edilmemiş günler cevaba giremez.
+                self._fill_missing_insights(db, start_date, end_date)
+
+                engine = AnalysisEngine(self.rag_engine.llm)
+                stream = engine.analyze_stream(
+                    db=db,
+                    user_question=self.user_query,
+                    intents=analiz_istekleri,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
                 for token in stream:
                     self.token_received.emit(token)
-                    
                 self.finished.emit(date_range)
-                
+
+            elif date_range:
+                # ROTA 2: Dönem özeti — günlükler okunur
+                self.mode_detected.emit("SQL", loading_msg)
+                stream = ReportEngine(self.rag_engine.llm).generate_report_stream(
+                    start_date=start_date,
+                    end_date=end_date,
+                    db=Database(),
+                    user_question=self.user_query,
+                )
+                for token in stream:
+                    self.token_received.emit(token)
+                self.finished.emit(date_range)
+
             else:
-                # ROUTE 2: Normal Vektör Arama (RAG)
+                # ROTA 3: Belirli anı arama (vektör tabanlı RAG)
                 self.mode_detected.emit("RAG", "Düşünüyor...")
                 for token in self.rag_engine.chat_stream(self.user_query, self.chat_history):
                     self.token_received.emit(token)
                 self.finished.emit(None)
-                
+
         except Exception as e:
             self.error.emit(str(e))
 
@@ -152,23 +237,75 @@ class IndexWorker(QThread):
         finally:
             self.finished.emit()
 
-class MoodAnalysisWorker(QThread):
-    """Arka planda günlük metinlerinin duygu puanını (mood_score: -10..+10) hesaplar ve SQLite'a yazar."""
+class InsightWorker(QThread):
+    """
+    Arka planda günlüklerden yapısal veri çıkarır (duygu puanı, tek cümlelik
+    özet, yapılanlar/ertelenenler/iyi gelenler etiketleri) ve SQLite'a yazar.
+
+    Eskiden burada yalnızca duygu puanı hesaplayan MoodAnalysisWorker vardı.
+    "En çok neyi erteledim?" gibi sorular sayma gerektirdiği ve model düz
+    metinden güvenilir sayamadığı için, sayılabilir veriyi yazma anında
+    üreten bu işçi onun yerini aldı.
+
+    Kayıt başına bir çıkarım yapılır ve sonuç önbelleğe alınır; aynı kayıt
+    (metni değişmedikçe) bir daha analiz edilmez.
+    """
+
+    progress = pyqtSignal(int, int)   # (tamamlanan, toplam)
     finished = pyqtSignal()
-    
-    def __init__(self, llm_engine, db, entries: list[dict]):
+
+    def __init__(self, extractor, db, entries: list[dict], merger=None):
         super().__init__()
-        self.llm_engine = llm_engine
+        self.extractor = extractor
         self.db = db
-        self.entries = entries # [{"date": "...", "content": "..."}, ...]
-        
+        self.entries = entries        # [{"date": "...", "content": "..."}, ...]
+        # Etiket birleştirici (ai/label_merger.py). Verilmezse etiketler
+        # yazıldıkları gibi saklanır.
+        self.merger = merger
+        self._cancelled = False
+
+    def cancel(self):
+        """Uygulama kapanırken ya da öncelik değişince işi durdurur."""
+        self._cancelled = True
+
     def run(self):
+        toplam = len(self.entries)
         try:
-            for entry in self.entries:
-                if entry.get("content"):
-                    score = self.llm_engine.analyze_mood(entry["content"])
-                    self.db.update_mood_score(entry["date"], score)
+            for sira, entry in enumerate(self.entries, start=1):
+                if self._cancelled:
+                    break
+
+                content = entry.get("content")
+                if not content:
+                    continue
+
+                try:
+                    insight = self.extractor.extract(content)
+
+                    facets = insight.facets
+                    if self.merger is not None:
+                        # "yürüyüşe çıkmak" -> "yürüyüş": sayımların
+                        # bölünmemesi için etiketler kanonik hale getirilir
+                        facets = self.merger.merge_facets(facets)
+
+                    self.db.save_insight(
+                        date=entry["date"],
+                        content=content,
+                        summary=insight.summary,
+                        energy=insight.energy,
+                        sleep_quality=insight.sleep_quality,
+                        facets=facets,
+                    )
+                    self.db.update_mood_score(entry["date"], insight.mood)
+                except Exception as e:
+                    # Tek bir sorunlu kayıt yüzünden geri kalan yüzlerce
+                    # kaydın analizi durmamalı; bu kayıt bir sonraki turda
+                    # yeniden denenir (çıkarımı kaydedilmediği için bekleyen
+                    # listesinde kalır).
+                    print(f"Çıkarım atlandı ({entry['date']}):", e)
+
+                self.progress.emit(sira, toplam)
         except Exception as e:
-            print("MoodAnalysisWorker Hatası:", e)
+            print("InsightWorker Hatası:", e)
         finally:
             self.finished.emit()

@@ -108,13 +108,29 @@ class DiaryVectorStore:
         rows = self.table.search().select(["date"]).limit(None).to_list()
         return {row["date"] for row in rows}
 
-    def search(self, query_vector: list[float], limit: int = 5) -> list[dict]:
-        """Verilen sorgu vektörüne en yakın (semantik olarak benzer) parçaları bulur."""
+    def search(self, query_vector: list[float], limit: int = 5,
+               date_from: str = None, date_to: str = None) -> list[dict]:
+        """
+        Verilen sorgu vektörüne en yakın (semantik olarak benzer) parçaları bulur.
+
+        date_from/date_to verilirse arama o tarih aralığıyla sınırlanır.
+        Analiz cevaplarına örnek göstermek için gereklidir: "Mart ayında..."
+        sorusunda Nisan'dan bir alıntı getirmek yanıltıcı olur.
+        """
         if self.table.count_rows() == 0:
             return []
-            
+
+        query = self.table.search(query_vector)
+
+        if date_from and date_to:
+            # prefilter=True: filtre vektör aramasından ÖNCE uygulanır, yani
+            # sonuç her zaman limit kadar (aralık içinden) kayıt döndürür.
+            query = query.where(
+                f"date >= '{date_from}' AND date <= '{date_to}'", prefilter=True
+            )
+
         # Vektör araması yap ve listeye çevir
-        results = self.table.search(query_vector).limit(limit).to_list()
+        results = query.limit(limit).to_list()
         
         formatted_results = []
         for r in results:
