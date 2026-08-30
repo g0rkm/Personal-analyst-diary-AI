@@ -10,10 +10,17 @@ Aynı anda birden fazla QThread (MoodAnalysis + Chat) erişirse segfault olur.
 Bu yüzden tüm erişimler threading.Lock ile sıraya alınır.
 """
 
+import json
 import os
 import threading
 from llama_cpp import Llama
+
+from core.token_budget import estimate_tokens
 from settings import load_settings
+
+# Modelin bağlam penceresi. Prompt + yanıt bu sınırın altında kalmalıdır;
+# core.token_budget bu değere göre bütçe hesaplar.
+CONTEXT_WINDOW = 4096
 
 class LlamaEngine:
     def __init__(self, model_path: str = None, gpu_layers: int = 0):
@@ -42,10 +49,32 @@ class LlamaEngine:
                     self.llm = Llama(
                         model_path=self.model_path,
                         n_gpu_layers=self.gpu_layers,
-                        n_ctx=4096, 
+                        n_ctx=CONTEXT_WINDOW,
                         verbose=False
                     )
             
+    def count_tokens(self, text: str) -> int:
+        """
+        Metnin modelin kendi tokenizer'ına göre token sayısını döner.
+
+        Model henüz yüklenmemişse MODEL YÜKLENMEZ — sadece tahmin döner.
+        Bütçe hesabı için 1.9 GB'lık modeli belleğe almak gereksizdir ve
+        arayüzü kilitler. Model zaten yüklüyse gerçek sayım yapılır.
+        """
+        if not text:
+            return 0
+
+        if self.llm is None:
+            return estimate_tokens(text)
+
+        try:
+            with self._lock:
+                return len(self.llm.tokenize(text.encode("utf-8"), add_bos=False))
+        except Exception:
+            # Tokenizer beklenmedik bir şekilde hata verirse bütçe hesabı
+            # çökmesin; temkinli tahmine düş.
+            return estimate_tokens(text)
+
     def chat_stream(self, messages: list[dict]):
         """
         Gelen mesaj geçmişine göre yanıtı token token (stream) üretir.
@@ -67,6 +96,42 @@ class LlamaEngine:
                 delta = chunk['choices'][0].get('delta', {})
                 if 'content' in delta:
                     yield delta['content']
+
+    def complete_json(self, messages: list[dict], schema: dict,
+                      max_tokens: int = 512) -> dict:
+        """
+        Modeli verilen JSON şemasına UYMAYA ZORLAYARAK yapısal çıktı üretir.
+
+        llama.cpp, şemayı bir GBNF dilbilgisine çevirip üretimi kısıtlar;
+        yani model şema dışında bir token üretemez. 3B'lik küçük bir modelden
+        güvenilir yapısal veri almanın tek pratik yolu budur — serbest metin
+        istenirse bozuk JSON, eksik alan ve uydurma anahtar dönüyor.
+
+        Şema ihlali ya da çözümleme hatası durumunda boş sözlük döner;
+        çağıran tarafın varsayılanlara düşmesi beklenir.
+        """
+        self.load_model()
+
+        with self._lock:
+            try:
+                response = self.llm.create_chat_completion(
+                    messages=messages,
+                    stream=False,
+                    temperature=0.1,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object", "schema": schema},
+                )
+                content = response["choices"][0]["message"]["content"]
+            except Exception as e:
+                print("Yapısal çıkarım hatası:", e)
+                return {}
+
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+        return parsed if isinstance(parsed, dict) else {}
 
     def analyze_mood(self, text: str) -> int:
         """Metnin duygu puanını -10 ile +10 arasında puanlar. Lock ile korunur."""

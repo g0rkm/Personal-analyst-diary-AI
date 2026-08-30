@@ -57,10 +57,31 @@ class FakeLLM:
     parçalar üretir.
     """
 
-    def __init__(self, chunks=None, mood=5):
+    def __init__(self, chunks=None, mood=5, chars_per_token=4, json_responses=None):
         self.chunks = chunks if chunks is not None else ["Merhaba", " dünya"]
         self.mood = mood
+        self.chars_per_token = chars_per_token
+        # complete_json çağrılarında sırayla döndürülecek sahte yanıtlar.
+        # Liste tükenirse son yanıt tekrar edilir; hiç verilmezse boş dict.
+        self.json_responses = list(json_responses or [])
         self.received_messages = []
+        self.received_schemas = []
+
+    def complete_json(self, messages, schema, max_tokens=512):
+        """Şema zorlamalı çıkarımın sahtesi: sıradaki hazır yanıtı döner."""
+        self.received_messages.append(messages)
+        self.received_schemas.append(schema)
+        if not self.json_responses:
+            return {}
+        if len(self.json_responses) == 1:
+            return self.json_responses[0]
+        return self.json_responses.pop(0)
+
+    def count_tokens(self, text):
+        """Deterministik sahte token sayacı (gerçek model gerekmez)."""
+        if not text:
+            return 0
+        return max(1, -(-len(text) // self.chars_per_token))
 
     def chat_stream(self, messages):
         self.received_messages.append(messages)

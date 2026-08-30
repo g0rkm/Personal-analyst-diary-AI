@@ -119,3 +119,73 @@ class TestPromptKurallari:
     def test_simdiki_zaman_kurali_prompta_yazilir(self, motor, dolu_db, fake_llm):
         list(motor.generate_report_stream("2026-08-01", "2026-08-31", dolu_db))
         assert "ŞİMDİKİ ZAMAN" in fake_llm.received_messages[0][0]["content"]
+
+
+class TestBaglamButcesi:
+    """
+    Regresyon: ReportEngine bir tarih aralığındaki TÜM kayıtları uç uca
+    ekleyip prompt'a koyuyordu. Bir aylık günlük 4096 token'lık bağlam
+    penceresini aşıyor, llama.cpp hata fırlatıyor ve kullanıcı
+    "Bu ay ruh halim nasıldı?" sorusuna cevap yerine hata görüyordu.
+    """
+
+    @pytest.fixture
+    def bir_aylik_db(self, temp_db):
+        uzun_metin = (
+            "Bugün sabah erken kalktım ama yine de kendimi yorgun hissediyordum. "
+            "İşe gidince toplantı uzadı ve rapor yazma işini yine erteledim. "
+            "Öğle arasında kısa bir yürüyüş yaptım, bu iyi geldi. Akşam spor "
+            "salonuna gitmeyi planlamıştım ama vazgeçtim, kitap okudum. "
+        ) * 2
+        for gun in range(1, 31):
+            temp_db.save_entry(f"2026-03-{gun:02d}", uzun_metin, happiness_score=5)
+        return temp_db
+
+    def test_bir_aylik_kayit_promptu_tasirmaz(self, motor, bir_aylik_db, fake_llm):
+        from ai.report_engine import RESPONSE_TOKENS, SYSTEM_PROMPT_TOKENS
+        from ai.llm_engine import CONTEXT_WINDOW
+
+        list(motor.generate_report_stream("2026-03-01", "2026-03-31", bir_aylik_db))
+
+        sistem = fake_llm.received_messages[0][0]["content"]
+        kullanilan = fake_llm.count_tokens(sistem)
+
+        assert kullanilan <= CONTEXT_WINDOW - RESPONSE_TOKENS, (
+            f"sistem promptu {kullanilan} token — yanıt için yer kalmıyor"
+        )
+
+    def test_kirpma_kullaniciya_bildirilir(self, motor, bir_aylik_db, fake_llm):
+        list(motor.generate_report_stream("2026-03-01", "2026-03-31", bir_aylik_db))
+        assert "okunabildi" in fake_llm.received_messages[0][0]["content"]
+
+    def test_en_yeni_kayitlar_oncelikli_tutulur(self, motor, bir_aylik_db, fake_llm):
+        bir_aylik_db.save_entry("2026-03-30", "EN YENI GUN ISARETI", happiness_score=5)
+
+        list(motor.generate_report_stream("2026-03-01", "2026-03-31", bir_aylik_db))
+
+        assert "EN YENI GUN ISARETI" in fake_llm.received_messages[0][0]["content"]
+
+    def test_ortalama_duygu_kirpmadan_etkilenmez(self, motor, bir_aylik_db, fake_llm):
+        # Kırpılan günlerin puanı da ortalamaya girmeli
+        for gun in range(1, 31):
+            bir_aylik_db.update_mood_score(f"2026-03-{gun:02d}", 4)
+
+        list(motor.generate_report_stream("2026-03-01", "2026-03-31", bir_aylik_db))
+
+        assert "4.0" in fake_llm.received_messages[0][0]["content"]
+
+    def test_kisa_donem_kirpilmaz(self, motor, temp_db, fake_llm):
+        for gun in range(1, 4):
+            temp_db.save_entry(f"2026-03-0{gun}", "kısa bir gün", happiness_score=5)
+
+        list(motor.generate_report_stream("2026-03-01", "2026-03-03", temp_db))
+
+        assert "okunabildi" not in fake_llm.received_messages[0][0]["content"]
+
+    def test_hicbir_kayit_sigmazsa_anlasilir_mesaj(self, motor, temp_db, fake_llm):
+        temp_db.save_entry("2026-03-01", "x" * 100_000, happiness_score=5)
+
+        cikti = "".join(motor.generate_report_stream("2026-03-01", "2026-03-31", temp_db))
+
+        assert "daha dar bir tarih aralığı" in cikti
+        assert fake_llm.received_messages == []
